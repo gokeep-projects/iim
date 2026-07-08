@@ -9,6 +9,33 @@
   import ChatWorkspace from "./components/ChatWorkspace.svelte";
   import Inspector from "./components/Inspector.svelte";
   import WorkspacePanel from "./components/WorkspacePanel.svelte";
+  import Archive from "lucide-svelte/icons/archive";
+  import Ban from "lucide-svelte/icons/ban";
+  import BellOff from "lucide-svelte/icons/bell-off";
+  import CheckCheck from "lucide-svelte/icons/check-check";
+  import CheckCircle2 from "lucide-svelte/icons/check-circle-2";
+  import CheckSquare from "lucide-svelte/icons/check-square";
+  import Copy from "lucide-svelte/icons/copy";
+  import FileText from "lucide-svelte/icons/file-text";
+  import HardDrive from "lucide-svelte/icons/hard-drive";
+  import Info from "lucide-svelte/icons/info";
+  import MessageSquareText from "lucide-svelte/icons/message-square-text";
+  import Minimize2 from "lucide-svelte/icons/minimize-2";
+  import Palette from "lucide-svelte/icons/palette";
+  import Pin from "lucide-svelte/icons/pin";
+  import PinOff from "lucide-svelte/icons/pin-off";
+  import RefreshCw from "lucide-svelte/icons/refresh-cw";
+  import Reply from "lucide-svelte/icons/reply";
+  import Scissors from "lucide-svelte/icons/scissors";
+  import Send from "lucide-svelte/icons/send";
+  import Settings from "lucide-svelte/icons/settings";
+  import ShieldCheck from "lucide-svelte/icons/shield-check";
+  import Star from "lucide-svelte/icons/star";
+  import Trash2 from "lucide-svelte/icons/trash-2";
+  import UploadCloud from "lucide-svelte/icons/upload-cloud";
+  import UserRound from "lucide-svelte/icons/user-round";
+  import Volume2 from "lucide-svelte/icons/volume-2";
+  import X from "lucide-svelte/icons/x";
   import {
     conversationDisplayTitle,
     directConversationPeer,
@@ -44,6 +71,7 @@
     type PeerStatus,
     type PendingFileDraft,
     type StorageOverview,
+    type StorageMigrationProgress,
     type TransportConfig,
     type TrustedPeer,
     type TypingEvent,
@@ -77,10 +105,12 @@
     markConversationRead,
     markConversationUnread,
     minimizeToTray,
+    migrateStorageDirectory,
     showMainWindow,
     openStorageLocation,
     openTransferLocation,
     retryMessage,
+    restartApp,
     resumeTransfer,
     getConversationDraft,
     getAppPreferences,
@@ -259,6 +289,7 @@
   let privacyMode = false;
   let closeToTray = true;
   let inspectorTab: InspectorTab = "details";
+  let inspectorOpen = false;
   let settingsTab: SettingsTab = "profile";
   let seedText = "";
   let rangeText = "";
@@ -284,6 +315,8 @@
   let profileHostname = "";
   let profileStatus: PeerStatus = "online";
   let storageOverview: StorageOverview | null = null;
+  let storageMigrationProgress: StorageMigrationProgress | null = null;
+  let storageMigrationActive = false;
   let trustedPeers: TrustedPeer[] = [];
   let messageMenu: MessageMenuState | null = null;
   let conversationMenu: ConversationMenuState | null = null;
@@ -305,6 +338,7 @@
   let selectedMessageIds: string[] = [];
   let typingIndicators: Record<string, TypingIndicator> = {};
   let typingTimers: Record<string, number> = {};
+  let demoReplyTimers: number[] = [];
   let lastTypingSentAt = 0;
   let draftSaveTimer: number | null = null;
   let pendingNotificationConversationId = "";
@@ -397,6 +431,12 @@
       : [];
   $: forwardingTitle = forwardingMessageList.length > 1 ? `转发 ${forwardingMessageList.length} 条消息` : "选择会话";
   $: totalUnreadCount = visibleUnreadCount(conversations);
+  $: reachablePeerCount = peers.filter((peer) => peer.status === "online").length;
+  $: unavailablePeerCount = peers.length - reachablePeerCount;
+  $: pendingOutboxCount = outboxMessages.filter((message) => message.status === "queued" || message.status === "failed").length;
+  $: welcomeSignalText = networkWarning || (reachablePeerCount > 0 ? "局域网直连通道可用" : "正在等待同网段设备");
+  $: showMessageShell = activeSection === "messages";
+  $: showInspector = showMessageShell && Boolean(activeConversation) && (inspectorOpen || activeConversation.startsWith("group:"));
   $: networkInputValidation = validateNetworkInputs(seedText, rangeText);
   $: networkTimingValidation = validateNetworkTiming(
     discoveryIntervalText,
@@ -411,7 +451,6 @@
     const handleDocumentContextMenu = (event: MouseEvent) => {
       const editable = editableTextElementFromTarget(event.target);
       const target = event.target instanceof Element ? event.target : null;
-      event.preventDefault();
       if (
         target?.closest(
           ".context-menu, .modal-backdrop, .message-detail-dialog, .forward-dialog, .image-preview-backdrop, .image-preview-dialog"
@@ -419,14 +458,13 @@
       ) {
         return;
       }
+      event.preventDefault();
       messageMenu = null;
       conversationMenu = null;
       contactMenu = null;
       transferMenu = null;
       if (!editable) {
         textEditMenu = null;
-        appMenu = clampContextMenuPosition(event, 190, 220);
-        focusContextMenuAfterRender();
         return;
       }
       appMenu = null;
@@ -482,6 +520,8 @@
       document.removeEventListener("contextmenu", handleDocumentContextMenu);
       document.removeEventListener("click", closeContextMenu);
       document.removeEventListener("keydown", handleDocumentKeydown);
+      demoReplyTimers.forEach((timer) => clearTimeout(timer));
+      demoReplyTimers = [];
     };
   });
 
@@ -561,7 +601,11 @@
         networkWarning = warning;
         networkWarnings = [warning, ...networkWarnings.filter((item) => item !== warning)].slice(0, 5);
         statusText = warning;
-        inspectorTab = inspectorTabForNetworkWarning(warning);
+        settingsTab = inspectorTabForNetworkWarning(warning) === "security" ? "security" : "network";
+      }),
+      listen<StorageMigrationProgress>("storage:migration_progress", (event) => {
+        storageMigrationProgress = event.payload;
+        storageMigrationActive = event.payload.phase !== "done";
       }),
       listen<TypingEvent>("typing:changed", (event) => {
         handleTypingChanged(event.payload);
@@ -666,12 +710,12 @@
     trustedPeers = savedTrustedPeers;
     todoMessages = savedTodoMessages ?? [];
     outboxMessages = savedOutboxMessages ?? [];
-    activeConversation = initialConversationId(conversationList, peerList);
+    activeConversation = initialConversationId(conversationList);
     await loadConversation(activeConversation);
   }
 
-  function initialConversationId(conversationList: ConversationSummary[], peerList: PeerProfile[]) {
-    return conversationList[0]?.id ?? (peerList[0]?.peer_id ? `direct:${peerList[0].peer_id}` : "");
+  function initialConversationId(conversationList: ConversationSummary[]) {
+    return conversationList[0]?.id ?? "";
   }
 
   async function refreshPeers() {
@@ -696,6 +740,7 @@
       messages = [];
       hasMoreMessages = false;
       inspectorTab = "details";
+      inspectorOpen = false;
       conversationSearchOpen = false;
       conversationSearchQuery = "";
       conversationSearchDate = "";
@@ -719,6 +764,7 @@
     pinnedMessages = pinned ?? [];
     hasMoreMessages = messages.length >= messagePageSize;
     inspectorTab = conversationId.startsWith("group:") ? "members" : "details";
+    inspectorOpen = conversationId.startsWith("group:");
     conversationSearchOpen = false;
     conversationSearchQuery = "";
     conversationSearchDate = "";
@@ -760,11 +806,41 @@
       if (draftError) {
         statusText = `消息已发送，草稿清理失败：${draftError}`;
       }
+      scheduleDemoAutoReply(activeConversation, body);
       void publishTyping(false);
     } catch (error) {
       statusText = `消息发送失败：${error instanceof Error ? error.message : String(error)}`;
       chatNotice = statusText;
     }
+  }
+
+  function scheduleDemoAutoReply(conversationId: string, sentText: string) {
+    if (hasTauriRuntime()) return;
+    const timer = window.setTimeout(() => {
+      demoReplyTimers = demoReplyTimers.filter((item) => item !== timer);
+      const senderId = conversationId.startsWith("group:") ? "ops-peer" : conversationId.replace("direct:", "") || "demo-peer";
+      handleIncomingMessage({
+        id: `preview-reply-${Date.now()}`,
+        conversation_id: conversationId,
+        sender_id: senderId,
+        body: demoAutoReplyText(sentText),
+        attachments: [],
+        created_at: Date.now(),
+        status: "received",
+        recalled: false,
+        quote: null,
+        favorited: false,
+        reactions: []
+      });
+    }, 650);
+    demoReplyTimers = [...demoReplyTimers, timer];
+  }
+
+  function demoAutoReplyText(sentText: string) {
+    if (/文件|资料|附件/.test(sentText)) return "收到，我这边模拟确认一下文件清单。";
+    if (/截图|图片/.test(sentText)) return "收到截图了，我这边能正常预览。";
+    if (/[?？]/.test(sentText)) return "收到，我这边模拟回复：这个问题可以继续细化。";
+    return "收到，我这边已收到你的消息。";
   }
 
   async function handleSendNudge() {
@@ -1136,6 +1212,7 @@
       openSettings("profile");
       return;
     }
+    inspectorOpen = false;
     activeSection = section;
     if (section === "search") {
       try {
@@ -1151,6 +1228,7 @@
 
   function openSettings(tab: SettingsTab) {
     settingsTab = tab;
+    inspectorOpen = false;
     activeSection = "settings";
   }
 
@@ -1689,7 +1767,7 @@
     }
     try {
       await navigator.clipboard.writeText(endpoints);
-      statusText = `${displayPeerName(peer)} 端点已复制，可用于网络排障或种子节点配置`;
+      statusText = `${displayPeerName(peer)} 端点已复制，可用于网络排障`;
     } catch (error) {
       statusText = `${displayPeerName(peer)} 端点复制失败：${error instanceof Error ? error.message : String(error)}`;
     }
@@ -1847,6 +1925,7 @@
       }
       activeSection = "messages";
       inspectorTab = conversation.id.startsWith("group:") ? "members" : "details";
+      inspectorOpen = true;
       statusText = `已打开会话详情：${conversationDisplayTitle(conversation, peers, contactMetadata)}`;
     } catch (error) {
       statusText = `打开会话详情失败：${error instanceof Error ? error.message : String(error)}`;
@@ -2074,6 +2153,38 @@
   async function openStorage(kind: "data" | "received" | "staged") {
     await openStorageLocation(kind);
     statusText = "已打开存储位置";
+  }
+
+  async function chooseAndMigrateStorageDirectory() {
+    if (storageMigrationActive) return;
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "选择新的灵犀内网通数据目录"
+      });
+      if (!selected || Array.isArray(selected)) return;
+      storageMigrationActive = true;
+      storageMigrationProgress = {
+        phase: "preparing",
+        completed: 0,
+        total: 0,
+        current_path: selected
+      };
+      statusText = "正在迁移数据目录，请勿关闭应用";
+      storageOverview = await migrateStorageDirectory(selected);
+      storageMigrationProgress = {
+        phase: "done",
+        completed: 1,
+        total: 1,
+        current_path: storageOverview.data_dir
+      };
+      statusText = "数据目录迁移完成，正在重启以切换新目录";
+      await restartApp();
+    } catch (error) {
+      storageMigrationActive = false;
+      statusText = `数据目录迁移失败：${errorMessage(error)}`;
+    }
   }
 
   async function openTransfer(transferId: string) {
@@ -2859,6 +2970,7 @@
   function openContextMessageDetails() {
     if (!messageMenu) return;
     inspectorTab = activeConversation.startsWith("group:") ? "members" : "details";
+    inspectorOpen = true;
     activeSection = "messages";
     messageMenu = null;
   }
@@ -3509,49 +3621,59 @@
   }
 </script>
 
-<main class:app-dark={dark} class="app">
+<main
+  class:app-dark={dark}
+  class:messages-layout={showMessageShell}
+  class:welcome-home={showMessageShell && !activeConversation}
+  class:workspace-layout={!showMessageShell}
+  class:inspector-visible={showInspector}
+  class="app"
+>
   <Rail
     {activeSection}
     {dark}
     {notificationReady}
     unreadCount={totalUnreadCount}
     onSelect={selectSection}
-    onOpenNotificationSettings={() => openSettings("preferences")}
+    onOpenNotifications={() => selectSection("notifications")}
     onToggleTheme={toggleThemePreference}
   />
 
-  <ConversationList
-    {self}
-    {peers}
-    {contactMetadata}
-    {conversations}
-    {activeConversation}
-    {mentionedConversationIds}
-    {todoConversationCounts}
-    {outboxConversationCounts}
-    {failedOutboxConversationCounts}
-    {typingPreviewByConversation}
-    filter={conversationFilter}
-    {query}
-    {focusSearchToken}
-    {privacyMode}
-    onQueryChange={(value) => (query = value)}
-    onFilterChange={(value) => (conversationFilter = value)}
-    onSearch={handleSearch}
-    onSelectConversation={loadConversation}
-    onOpenContacts={() => (activeSection = "contacts")}
-    onOpenPeerDetails={openPeerDetails}
-    onRefreshPeers={refreshPeers}
-    onTogglePin={toggleConversationPinned}
-    onToggleMute={toggleConversationMuted}
-    onToggleArchive={toggleConversationArchived}
-    onDeleteConversation={confirmDeleteConversationById}
-    onMarkAllRead={markEveryConversationRead}
-    onConversationContext={openConversationContextMenu}
-    onPeerContext={openPeerConversationContextMenu}
-  />
+  {#if showMessageShell && !showInspector && (statusText.startsWith("已清空 ") || statusText === "会话已删除")}
+    <p class="message-status-toast" role="status" aria-live="polite">{statusText}</p>
+  {/if}
 
-  {#if activeSection === "messages"}
+  {#if showMessageShell}
+    <ConversationList
+      {self}
+      {peers}
+      {contactMetadata}
+      {conversations}
+      {activeConversation}
+      {mentionedConversationIds}
+      {todoConversationCounts}
+      {outboxConversationCounts}
+      {failedOutboxConversationCounts}
+      {typingPreviewByConversation}
+      {query}
+      {focusSearchToken}
+      {privacyMode}
+      onQueryChange={(value) => (query = value)}
+      onSearch={handleSearch}
+      onSelectConversation={loadConversation}
+      onOpenPeerDetails={openPeerDetails}
+      onRefreshPeers={refreshPeers}
+      onTogglePin={toggleConversationPinned}
+      onToggleMute={toggleConversationMuted}
+      onToggleArchive={toggleConversationArchived}
+      onDeleteConversation={confirmDeleteConversationById}
+      onMarkAllRead={markEveryConversationRead}
+      onConversationContext={openConversationContextMenu}
+      onPeerContext={openPeerConversationContextMenu}
+    />
+  {/if}
+
+  {#if showMessageShell && activeConversation}
     <ChatWorkspace
       title={activeConversationTitle}
       conversation={activeConversationSummary}
@@ -3601,8 +3723,14 @@
       onClearPendingFiles={clearPendingFileDrafts}
       onSendPendingFiles={sendPendingFileDrafts}
       onStartScreenshot={startScreenshotWorkflow}
-      onShowDetails={() => (inspectorTab = activeConversation.startsWith("group:") ? "members" : "details")}
-      onShowTransfers={() => (inspectorTab = "transfers")}
+      onShowDetails={() => {
+        inspectorTab = activeConversation.startsWith("group:") ? "members" : "details";
+        inspectorOpen = true;
+      }}
+      onShowTransfers={() => {
+        inspectorTab = "transfers";
+        inspectorOpen = true;
+      }}
       onOpenTransfer={openTransfer}
       onCopyAttachmentFiles={copyAttachmentFiles}
       onRetryMessage={resendMessage}
@@ -3632,6 +3760,134 @@
       onBulkDeleteMessages={confirmDeleteSelectedMessages}
       onUnpinPinnedMessage={unpinPinnedMessage}
     />
+  {:else if showMessageShell}
+    <section class="empty-workspace-panel" aria-label="空会话">
+      <div class="empty-workspace-card welcome-launchpad">
+        <div class="welcome-main">
+          <div class="welcome-copy">
+            <span class="welcome-kicker">
+              <ShieldCheck size={15} />
+              局域网直连 · 无中间服务器
+            </span>
+            <h1>
+              <span>内网消息</span>
+              <span>即刻直连</span>
+            </h1>
+            <p>发现同网段设备、发起直连会话、继续文件传输，都在这个工作台完成。</p>
+          </div>
+          <div class:warning={Boolean(networkWarning)} class="welcome-dashboard" aria-label="直连态势">
+            <header>
+              {#if networkWarning}
+                <BellOff size={18} />
+              {:else}
+                <CheckCircle2 size={18} />
+              {/if}
+              <span>
+                <strong>{networkWarning ? "网络需要关注" : "直连态势"}</strong>
+                <small>{welcomeSignalText}</small>
+              </span>
+            </header>
+            <div class="welcome-dashboard-meter">
+              <b>{reachablePeerCount}</b>
+              <span>可联系设备</span>
+            </div>
+            <div class="welcome-dashboard-grid">
+              <span>
+                <RefreshCw size={14} />
+                UDP 发现
+                <b>{peers.length}</b>
+              </span>
+              <span>
+                <MessageSquareText size={14} />
+                会话
+                <b>{conversations.length}</b>
+              </span>
+              <span>
+                <UploadCloud size={14} />
+                文件传输
+                <b>{transferTasks.length}</b>
+              </span>
+              <span>
+                <ShieldCheck size={14} />
+                待处理
+                <b>{pendingOutboxCount + totalUnreadCount}</b>
+              </span>
+            </div>
+          </div>
+          <div class="welcome-status-strip" aria-label="当前概览">
+            <span><b>{reachablePeerCount}</b> 可联系</span>
+            <span><b>{conversations.length}</b> 会话</span>
+            <span><b>{pendingOutboxCount + totalUnreadCount}</b> 待处理</span>
+          </div>
+          <div class="welcome-route-grid" aria-label="快速入口">
+            <button type="button" on:click={() => (activeSection = "contacts")}>
+              <UserRound size={15} />
+              <span>
+                <strong>找人开聊</strong>
+                <small>{reachablePeerCount} 台设备可联系，{unavailablePeerCount} 台暂不可达</small>
+              </span>
+            </button>
+            <button type="button" on:click={refreshPeers}>
+              <RefreshCw size={15} />
+              <span>
+                <strong>重新发现</strong>
+                <small>刷新 UDP 发现结果和在线状态</small>
+              </span>
+            </button>
+            <button type="button" on:click={() => (activeSection = "files")}>
+              <UploadCloud size={15} />
+              <span>
+                <strong>文件传输</strong>
+                <small>查看断点续传和接收目录</small>
+              </span>
+            </button>
+            <button type="button" on:click={() => (activeSection = "settings")}>
+              <Settings size={15} />
+              <span>
+                <strong>调好体验</strong>
+                <small>通知、托盘、主题和安全信任</small>
+              </span>
+            </button>
+          </div>
+          <div class="empty-workspace-actions">
+            <button class="tool-button primary-welcome-action" type="button" aria-label="查看联系人" on:click={() => (activeSection = "contacts")}>
+              <UserRound size={15} />
+              查看联系人
+            </button>
+            <button class="tool-button" type="button" aria-label="刷新联系人" on:click={refreshPeers}>
+              <RefreshCw size={15} />
+              刷新联系人
+            </button>
+            <button class="tool-button" type="button" aria-label="打开设置" on:click={() => (activeSection = "settings")}>
+              <Settings size={15} />
+              打开设置
+            </button>
+          </div>
+        </div>
+        <aside class="welcome-network-panel" aria-label="内网直连状态">
+          <div class="welcome-topology" aria-hidden="true">
+            <span class="topology-node local">本机</span>
+            <span class="topology-link link-a"></span>
+            <span class="topology-link link-b"></span>
+            <span class="topology-link link-c"></span>
+            <span class="topology-node peer peer-a">{reachablePeerCount}</span>
+            <span class="topology-node peer peer-b">{conversations.length}</span>
+            <span class="topology-node peer peer-c">{pendingOutboxCount + totalUnreadCount}</span>
+          </div>
+          <div class:warning={Boolean(networkWarning)} class="welcome-signal-card">
+            {#if networkWarning}
+              <BellOff size={18} />
+            {:else}
+              <CheckCircle2 size={18} />
+            {/if}
+            <div>
+              <strong>{networkWarning ? "网络需要关注" : "直连状态正常"}</strong>
+              <span>{welcomeSignalText}</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
   {:else}
     <WorkspacePanel
       section={activeSection}
@@ -3648,10 +3904,6 @@
       {query}
       {settings}
       {transportConfig}
-      {seedText}
-      {rangeText}
-      {discoveryIntervalText}
-      {peerTtlText}
       {transferTasks}
       {profileName}
       {profileHostname}
@@ -3668,6 +3920,8 @@
       {networkInputWarning}
       {networkWarnings}
       {storageOverview}
+      {storageMigrationProgress}
+      {storageMigrationActive}
       {trustedPeers}
       {settingsTab}
       onTogglePeer={togglePeer}
@@ -3680,18 +3934,12 @@
       onMessageContext={openMessageContextMenu}
       onRetryOutboxMessages={retryOutboxMessages}
       onCreateGroup={handleCreateGroup}
+      onRefreshPeers={refreshPeers}
       onSearch={handleSearch}
       onRefreshFavorites={async () => {
         const refreshed = await refreshMessageCollections();
         statusText = `已刷新消息资料：收藏 ${refreshed.favorites.length} 条，待办 ${refreshed.todos.length} 条，发件箱 ${refreshed.outbox.length} 条`;
       }}
-      onToggleAutoDiscovery={toggleAutoDiscovery}
-      onToggleMulticast={toggleMulticast}
-      onSeedTextChange={(value) => (seedText = value)}
-      onRangeTextChange={(value) => (rangeText = value)}
-      onDiscoveryIntervalTextChange={(value) => (discoveryIntervalText = value)}
-      onPeerTtlTextChange={(value) => (peerTtlText = value)}
-      onSaveNetwork={saveAdvancedNetwork}
       onCopyNetworkDiagnostics={copyNetworkDiagnostics}
       onTrustPeer={handleTrustPeer}
       onRemoveTrustedPeer={forgetTrustedPeer}
@@ -3708,6 +3956,7 @@
       onTogglePrivacyMode={togglePrivacyModePreference}
       onToggleCloseToTray={toggleCloseToTrayPreference}
       onRefreshStorage={refreshStorageOverview}
+      onMigrateStorageDirectory={chooseAndMigrateStorageDirectory}
       onClearStagedFiles={clearClipboardStaging}
       onOpenStorage={openStorage}
       onCopyStoragePath={copyStoragePath}
@@ -3724,7 +3973,8 @@
     />
   {/if}
 
-  <Inspector
+  {#if showInspector}
+    <Inspector
     tab={inspectorTab}
     conversation={activeConversationSummary}
     {settings}
@@ -3738,30 +3988,15 @@
     {groupNameDraft}
     {groupAnnouncementDraft}
     {groupMemberDraftIds}
-    {notificationReady}
     {transferTasks}
     {storageOverview}
     {networkWarning}
     {networkWarnings}
     {networkInputWarning}
-    {seedText}
-    {rangeText}
-    {discoveryIntervalText}
-    {peerTtlText}
-    {dark}
     {trustStatus}
     {statusText}
     onTabChange={(value) => (inspectorTab = value)}
-    onToggleAutoDiscovery={toggleAutoDiscovery}
-    onToggleMulticast={toggleMulticast}
-    onSeedTextChange={(value) => (seedText = value)}
-    onRangeTextChange={(value) => (rangeText = value)}
-    onDiscoveryIntervalTextChange={(value) => (discoveryIntervalText = value)}
-    onPeerTtlTextChange={(value) => (peerTtlText = value)}
-    onSaveNetwork={saveAdvancedNetwork}
     onCopyNetworkDiagnostics={copyNetworkDiagnostics}
-    onEnableNotifications={enableNotifications}
-    onToggleTheme={toggleThemePreference}
     onTrustPeer={() => handleTrustPeer(activePeer)}
     onGroupNameChange={(value) => (groupNameDraft = value)}
     onGroupAnnouncementChange={(value) => (groupAnnouncementDraft = value)}
@@ -3786,7 +4021,30 @@
     onOpenDirectConversation={(peerId) => loadConversation(`direct:${peerId}`)}
     onContactMetadataChange={updateContactDraft}
     onSaveContactMetadata={saveContactMetadata}
-  />
+    />
+  {/if}
+
+  {#if storageMigrationActive}
+    <div class="modal-backdrop migration-lock" role="presentation">
+      <div class="migration-dialog" role="dialog" aria-modal="true" aria-label="数据目录迁移中">
+        <span class="eyebrow">存储迁移</span>
+        <h2>正在迁移数据目录</h2>
+        <p>为避免数据丢失，迁移完成前暂时不能操作应用。完成后会自动重启并从新目录打开数据库。</p>
+        {#if storageMigrationProgress}
+          <progress
+            max={Math.max(storageMigrationProgress.total, 1)}
+            value={Math.min(storageMigrationProgress.completed, Math.max(storageMigrationProgress.total, 1))}
+          ></progress>
+          <small>
+            {storageMigrationProgress.total > 0
+              ? `${storageMigrationProgress.completed}/${storageMigrationProgress.total}`
+              : "准备迁移文件"}
+          </small>
+          <span title={storageMigrationProgress.current_path}>{storageMigrationProgress.current_path}</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   {#if messageMenu}
     <div
@@ -3799,7 +4057,10 @@
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (messageMenu = null))}
     >
-      <button type="button" role="menuitem" on:click={copyContextMessage}>复制消息</button>
+      <button type="button" role="menuitem" on:click={copyContextMessage}>
+        <Copy size={13} />
+        复制消息
+      </button>
       {#if !messageMenu.message.recalled}
         <div class="reaction-menu-row" role="group" aria-label="快捷回应">
           {#each quickReactions as reaction}
@@ -3815,28 +4076,55 @@
             </button>
           {/each}
         </div>
-        <button type="button" role="menuitem" on:click={quoteContextMessage}>引用回复</button>
-        <button type="button" role="menuitem" on:click={openForwardContextMessage}>转发消息</button>
-        <button type="button" role="menuitem" on:click={() => startMessageSelection(messageMenu?.message)}>多选消息</button>
+        <button type="button" role="menuitem" on:click={quoteContextMessage}>
+          <Reply size={13} />
+          引用回复
+        </button>
+        <button type="button" role="menuitem" on:click={openForwardContextMessage}>
+          <UploadCloud size={13} />
+          转发消息
+        </button>
+        <button type="button" role="menuitem" on:click={() => startMessageSelection(messageMenu?.message)}>
+          <CheckSquare size={13} />
+          多选消息
+        </button>
         <button type="button" role="menuitem" on:click={toggleFavoriteContextMessage}>
+          <Star size={13} />
           {messageMenu.message.favorited ? "取消收藏" : "收藏消息"}
         </button>
         <button type="button" role="menuitem" on:click={toggleTodoContextMessage}>
+          <CheckSquare size={13} />
           {isMessageTodo(messageMenu.message) ? "完成待办" : "加入待办"}
         </button>
         <button type="button" role="menuitem" on:click={togglePinContextMessage}>
+          {#if isMessagePinned(messageMenu.message)}<PinOff size={13} />{:else}<Pin size={13} />{/if}
           {isMessagePinned(messageMenu.message) ? "取消置顶" : "置顶消息"}
         </button>
       {/if}
       {#if canRetryLocalMessage(messageMenu.message)}
-        <button type="button" role="menuitem" on:click={resendContextMessage}>重新发送</button>
+        <button type="button" role="menuitem" on:click={resendContextMessage}>
+          <RefreshCw size={13} />
+          重新发送
+        </button>
       {/if}
       {#if messageMenu.message.sender_id === self?.peer_id && !messageMenu.message.recalled}
-        <button type="button" role="menuitem" on:click={revokeContextMessage}>撤回消息</button>
+        <button type="button" role="menuitem" on:click={revokeContextMessage}>
+          <Reply size={13} />
+          撤回消息
+        </button>
       {/if}
-      <button type="button" role="menuitem" on:click={openContextMessageInfo}>消息详情</button>
-      <button type="button" role="menuitem" on:click={openContextMessageDetails}>会话详情</button>
-      <button class="danger" type="button" role="menuitem" on:click={deleteContextMessage}>删除消息</button>
+      <button type="button" role="menuitem" on:click={openContextMessageInfo}>
+        <Info size={13} />
+        消息详情
+      </button>
+      <button type="button" role="menuitem" on:click={openContextMessageDetails}>
+        <MessageSquareText size={13} />
+        会话详情
+      </button>
+      <button class="danger" type="button" role="menuitem" on:click={deleteContextMessage}>
+        <Trash2 size={13} />
+        删除消息
+      </button>
     </div>
   {/if}
 
@@ -3851,27 +4139,57 @@
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (conversationMenu = null))}
     >
-      <button type="button" role="menuitem" on:click={openConversationFromMenu}>打开会话</button>
-      <button type="button" role="menuitem" on:click={openMenuConversationDetails}>会话详情</button>
-      <button type="button" role="menuitem" on:click={copyConversationIdFromMenu}>复制会话 ID</button>
-      <button type="button" role="menuitem" on:click={copyConversationDiagnosticFromMenu}>复制会话诊断</button>
+      <button type="button" role="menuitem" on:click={openConversationFromMenu}>
+        <MessageSquareText size={13} />
+        打开会话
+      </button>
+      <button type="button" role="menuitem" on:click={openMenuConversationDetails}>
+        <Info size={13} />
+        会话详情
+      </button>
+      <button type="button" role="menuitem" on:click={copyConversationIdFromMenu}>
+        <Copy size={13} />
+        复制会话 ID
+      </button>
+      <button type="button" role="menuitem" on:click={copyConversationDiagnosticFromMenu}>
+        <FileText size={13} />
+        复制会话诊断
+      </button>
       <button type="button" role="menuitem" on:click={toggleMenuConversationPinned}>
+        {#if conversationMenu.conversation.pinned}<PinOff size={13} />{:else}<Pin size={13} />{/if}
         {conversationMenu.conversation.pinned ? "取消置顶" : "置顶"}
       </button>
       <button type="button" role="menuitem" on:click={toggleMenuConversationMuted}>
+        {#if conversationMenu.conversation.muted}<Volume2 size={13} />{:else}<BellOff size={13} />{/if}
         {conversationMenu.conversation.muted ? "取消免打扰" : "免打扰"}
       </button>
       <button type="button" role="menuitem" on:click={toggleMenuConversationArchived}>
+        <Archive size={13} />
         {conversationMenu.conversation.archived ? "取消归档" : "归档"}
       </button>
       {#if conversationMenu.conversation.unread_count > 0}
-        <button type="button" role="menuitem" on:click={markMenuConversationRead}>标为已读</button>
+        <button type="button" role="menuitem" on:click={markMenuConversationRead}>
+          <CheckCheck size={13} />
+          标为已读
+        </button>
       {:else}
-        <button type="button" role="menuitem" on:click={markMenuConversationUnread}>标为未读</button>
+        <button type="button" role="menuitem" on:click={markMenuConversationUnread}>
+          <MessageSquareText size={13} />
+          标为未读
+        </button>
       {/if}
-      <button type="button" role="menuitem" on:click={exportMenuConversation}>导出聊天记录</button>
-      <button class="danger" type="button" role="menuitem" on:click={clearMenuConversationMessages}>清空聊天记录</button>
-      <button class="danger" type="button" role="menuitem" on:click={deleteMenuConversation}>删除会话</button>
+      <button type="button" role="menuitem" on:click={exportMenuConversation}>
+        <FileText size={13} />
+        导出聊天记录
+      </button>
+      <button class="danger" type="button" role="menuitem" on:click={clearMenuConversationMessages}>
+        <Trash2 size={13} />
+        清空聊天记录
+      </button>
+      <button class="danger" type="button" role="menuitem" on:click={deleteMenuConversation}>
+        <Trash2 size={13} />
+        删除会话
+      </button>
     </div>
   {/if}
 
@@ -3887,14 +4205,23 @@
       on:keydown={(event) => handleContextMenuKeydown(event, () => (contactMenu = null))}
     >
       <button type="button" role="menuitem" disabled={contactMetadataFor(contactMenu.peer.peer_id).blocked} on:click={openContactConversationFromMenu}>
+        <MessageSquareText size={13} />
         发起聊天
       </button>
-      <button type="button" role="menuitem" on:click={openContactDetailsFromMenu}>联系人详情</button>
-      <button type="button" role="menuitem" on:click={copyContactDiagnosticFromMenu}>复制联系人诊断</button>
+      <button type="button" role="menuitem" on:click={openContactDetailsFromMenu}>
+        <UserRound size={13} />
+        联系人详情
+      </button>
+      <button type="button" role="menuitem" on:click={copyContactDiagnosticFromMenu}>
+        <FileText size={13} />
+        复制联系人诊断
+      </button>
       <button type="button" role="menuitem" on:click={toggleContactFavoriteFromMenu}>
+        <Star size={13} />
         {contactMetadataFor(contactMenu.peer.peer_id).favorite ? "取消星标" : "星标联系人"}
       </button>
       <button class="danger" type="button" role="menuitem" on:click={toggleContactBlockedFromMenu}>
+        <Ban size={13} />
         {contactMetadataFor(contactMenu.peer.peer_id).blocked ? "取消阻止" : "阻止联系人"}
       </button>
       <button
@@ -3904,6 +4231,7 @@
         title={`复制${displayPeerName(contactMenu.peer)}设备 ID`}
         on:click={copyContactDeviceIdFromMenu}
       >
+        <Copy size={13} />
         复制设备 ID
       </button>
       <button
@@ -3914,6 +4242,7 @@
         disabled={contactMenu.peer.endpoints.length === 0}
         on:click={copyContactEndpointFromMenu}
       >
+        <Copy size={13} />
         复制端点
       </button>
       <button
@@ -3923,6 +4252,7 @@
         title={`复制${displayPeerName(contactMenu.peer)}指纹`}
         on:click={copyContactFingerprintFromMenu}
       >
+        <ShieldCheck size={13} />
         复制指纹
       </button>
     </div>
@@ -3939,17 +4269,38 @@
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (transferMenu = null))}
     >
-      <button type="button" role="menuitem" on:click={openTransferFromMenu}>定位传输目录</button>
-      <button type="button" role="menuitem" on:click={copyTransferIdFromMenu}>复制传输 ID</button>
-      <button type="button" role="menuitem" on:click={copyTransferFileListFromMenu}>复制文件清单</button>
-      <button type="button" role="menuitem" on:click={copyTransferDiagnosticFromMenu}>复制传输记录</button>
+      <button type="button" role="menuitem" on:click={openTransferFromMenu}>
+        <HardDrive size={13} />
+        定位传输目录
+      </button>
+      <button type="button" role="menuitem" on:click={copyTransferIdFromMenu}>
+        <Copy size={13} />
+        复制传输 ID
+      </button>
+      <button type="button" role="menuitem" on:click={copyTransferFileListFromMenu}>
+        <Copy size={13} />
+        复制文件清单
+      </button>
+      <button type="button" role="menuitem" on:click={copyTransferDiagnosticFromMenu}>
+        <FileText size={13} />
+        复制传输记录
+      </button>
       {#if isActiveTransferTask(transferMenu.task)}
-        <button type="button" role="menuitem" on:click={cancelTransferFromMenu}>取消传输</button>
+        <button type="button" role="menuitem" on:click={cancelTransferFromMenu}>
+          <X size={13} />
+          取消传输
+        </button>
       {/if}
       {#if transferMenu.task.resumable}
-        <button type="button" role="menuitem" on:click={resumeTransferFromMenu}>重新广播</button>
+        <button type="button" role="menuitem" on:click={resumeTransferFromMenu}>
+          <RefreshCw size={13} />
+          重新广播
+        </button>
       {/if}
-      <button class="danger" type="button" role="menuitem" on:click={deleteTransferFromMenu}>删除记录</button>
+      <button class="danger" type="button" role="menuitem" on:click={deleteTransferFromMenu}>
+        <Trash2 size={13} />
+        删除记录
+      </button>
     </div>
   {/if}
 
@@ -3964,12 +4315,30 @@
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (appMenu = null))}
     >
-      <button type="button" role="menuitem" on:click={refreshPeersFromAppMenu}>刷新联系人</button>
-      <button type="button" role="menuitem" on:click={openContactsFromAppMenu}>联系人</button>
-      <button type="button" role="menuitem" on:click={openFilesFromAppMenu}>文件传输</button>
-      <button type="button" role="menuitem" on:click={openSettingsFromAppMenu}>设置</button>
-      <button type="button" role="menuitem" on:click={minimizeToTrayFromAppMenu}>最小化到托盘</button>
-      <button type="button" role="menuitem" on:click={toggleThemeFromAppMenu}>{dark ? "浅色主题" : "深色主题"}</button>
+      <button type="button" role="menuitem" on:click={refreshPeersFromAppMenu}>
+        <RefreshCw size={13} />
+        刷新联系人
+      </button>
+      <button type="button" role="menuitem" on:click={openContactsFromAppMenu}>
+        <UserRound size={13} />
+        联系人
+      </button>
+      <button type="button" role="menuitem" on:click={openFilesFromAppMenu}>
+        <UploadCloud size={13} />
+        文件传输
+      </button>
+      <button type="button" role="menuitem" on:click={openSettingsFromAppMenu}>
+        <Settings size={13} />
+        设置
+      </button>
+      <button type="button" role="menuitem" on:click={minimizeToTrayFromAppMenu}>
+        <Minimize2 size={13} />
+        最小化到托盘
+      </button>
+      <button type="button" role="menuitem" on:click={toggleThemeFromAppMenu}>
+        <Palette size={13} />
+        {dark ? "浅色主题" : "深色主题"}
+      </button>
     </div>
   {/if}
 
@@ -3984,10 +4353,22 @@
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (textEditMenu = null))}
     >
-      <button type="button" role="menuitem" on:click={() => copyTextEditSelection(false)}>复制</button>
-      <button type="button" role="menuitem" on:click={() => copyTextEditSelection(true)}>剪切</button>
-      <button type="button" role="menuitem" on:click={pasteTextEditClipboard}>粘贴</button>
-      <button type="button" role="menuitem" on:click={selectAllTextEdit}>全选</button>
+      <button type="button" role="menuitem" on:click={() => copyTextEditSelection(false)}>
+        <Copy size={13} />
+        复制
+      </button>
+      <button type="button" role="menuitem" on:click={() => copyTextEditSelection(true)}>
+        <Scissors size={13} />
+        剪切
+      </button>
+      <button type="button" role="menuitem" on:click={pasteTextEditClipboard}>
+        <FileText size={13} />
+        粘贴
+      </button>
+      <button type="button" role="menuitem" on:click={selectAllTextEdit}>
+        <CheckSquare size={13} />
+        全选
+      </button>
     </div>
   {/if}
 
@@ -4009,7 +4390,9 @@
             <span class="eyebrow">详情</span>
             <h2>消息详情</h2>
           </div>
-          <button class="icon-button" type="button" title="关闭" on:click={closeMessageDetails}>×</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeMessageDetails}>
+            <X size={15} />
+          </button>
         </header>
         <div class="message-detail-content">
           <dl class="message-detail-grid">
@@ -4112,19 +4495,42 @@
                     <small>还有 {attachment.manifest.files.length - 6} 个文件</small>
                   {/if}
                   <small>SHA-256 · {attachment.manifest.sha256}</small>
-                  <button type="button" on:click={() => openTransfer(attachment.manifest.transfer_id)}>打开附件目录</button>
-                  <button type="button" on:click={() => copyMessageDetailAttachmentList(attachment.manifest)}>复制附件清单</button>
-                  <button type="button" on:click={() => copyMessageDetailValue(attachment.manifest.transfer_id, "附件传输 ID")}>复制附件传输 ID</button>
-                  <button type="button" on:click={() => copyMessageDetailValue(attachment.manifest.sha256, "附件 SHA-256")}>复制附件 SHA-256</button>
+                  <div class="message-detail-attachment-actions">
+                    <button class="row-action" type="button" on:click={() => openTransfer(attachment.manifest.transfer_id)}>
+                      <HardDrive size={13} />
+                      打开附件目录
+                    </button>
+                    <button class="row-action" type="button" on:click={() => copyMessageDetailAttachmentList(attachment.manifest)}>
+                      <Copy size={13} />
+                      复制附件清单
+                    </button>
+                    <button class="row-action" type="button" on:click={() => copyMessageDetailValue(attachment.manifest.transfer_id, "附件传输 ID")}>
+                      <Copy size={13} />
+                      复制附件传输 ID
+                    </button>
+                    <button class="row-action" type="button" on:click={() => copyMessageDetailValue(attachment.manifest.sha256, "附件 SHA-256")}>
+                      <Copy size={13} />
+                      复制附件 SHA-256
+                    </button>
+                  </div>
                 </div>
               {/each}
             </div>
           {/if}
         </div>
         <div class="message-detail-actions">
-          <button type="button" on:click={() => copyMessageDetailAuditReport(detailMessage)}>复制审计报告</button>
-          <button type="button" on:click={() => copyMessageDetailValue(detailMessage.id, "消息 ID")}>复制消息 ID</button>
-          <button type="button" on:click={() => copyMessageDetailValue(detailMessage.conversation_id, "会话 ID")}>复制会话 ID</button>
+          <button class="row-action" type="button" on:click={() => copyMessageDetailAuditReport(detailMessage)}>
+            <Copy size={13} />
+            复制审计报告
+          </button>
+          <button class="row-action" type="button" on:click={() => copyMessageDetailValue(detailMessage.id, "消息 ID")}>
+            <Copy size={13} />
+            复制消息 ID
+          </button>
+          <button class="row-action" type="button" on:click={() => copyMessageDetailValue(detailMessage.conversation_id, "会话 ID")}>
+            <Copy size={13} />
+            复制会话 ID
+          </button>
         </div>
         {#if messageDetailStatus}
           <p class="hint message-detail-status">{messageDetailStatus}</p>
@@ -4151,12 +4557,22 @@
             <span class="eyebrow">危险操作</span>
             <h2>{confirmDialog.title}</h2>
           </div>
-          <button class="icon-button" type="button" title="关闭" on:click={closeConfirmDialog}>×</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeConfirmDialog}>
+            <X size={15} />
+          </button>
         </header>
         <p>{confirmDialog.body}</p>
         <div class="confirm-dialog-actions">
-          <button type="button" on:click={closeConfirmDialog}>取消</button>
-          <button class:danger={confirmDialog.danger} type="button" on:click={confirmDialogAction}>
+          <button class="row-action" type="button" on:click={closeConfirmDialog}>
+            <X size={13} />
+            取消
+          </button>
+          <button class:danger={confirmDialog.danger} class="row-action" type="button" on:click={confirmDialogAction}>
+            {#if confirmDialog.danger}
+              <Trash2 size={13} />
+            {:else}
+              <CheckCircle2 size={13} />
+            {/if}
             {confirmDialog.confirmLabel}
           </button>
         </div>
@@ -4182,7 +4598,9 @@
             <span class="eyebrow">转发</span>
             <h2>{forwardingTitle}</h2>
           </div>
-          <button class="icon-button" type="button" title="关闭" on:click={closeForwardDialog}>×</button>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeForwardDialog}>
+            <X size={15} />
+          </button>
         </header>
         <div class="forward-preview">
           {#if forwardingMessageList.length === 1}
@@ -4216,11 +4634,15 @@
         <div class="forward-target-list">
           {#each forwardTargets as conversation (conversation.id)}
             <button type="button" on:click={() => confirmForwardMessage(conversation.id)}>
+              <i aria-hidden="true">{conversationDisplayTitle(conversation, peers, contactMetadata).slice(0, 1)}</i>
               <span>
                 <strong>{conversationDisplayTitle(conversation, peers, contactMetadata)}</strong>
                 <small>{conversation.id}</small>
               </span>
-              <b>{conversation.archived ? "归档" : conversation.muted ? "免扰" : "发送"}</b>
+              <b>
+                <Send size={13} />
+                {conversation.archived ? "归档" : conversation.muted ? "免扰" : "发送"}
+              </b>
             </button>
           {:else}
             <p class="empty-note">没有匹配的会话</p>

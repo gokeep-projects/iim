@@ -172,6 +172,13 @@ export interface StorageOverview {
   transfer_task_count: number;
 }
 
+export interface StorageMigrationProgress {
+  phase: string;
+  completed: number;
+  total: number;
+  current_path: string;
+}
+
 export interface TypingEvent {
   conversation_id: string;
   sender_id: string;
@@ -277,7 +284,7 @@ const demoMessages = (conversationId: string): ChatMessage[] => [
     id: "hello",
     conversation_id: conversationId,
     sender_id: "demo-peer",
-    body: "欢迎使用灵犀内网通。无需服务器，同网段自动发现，跨网段可在高级网络里补充种子地址。",
+    body: "欢迎使用灵犀内网通。无需服务器，同网段自动发现；联系人页就是设备发现与管理入口。",
     attachments: [],
     created_at: Date.now() - 180000,
     status: "received",
@@ -902,6 +909,31 @@ export async function getAppPreferences(): Promise<AppPreferences> {
       close_to_tray: true,
     };
   return invoke("get_app_preferences");
+}
+
+export async function migrateStorageDirectory(
+  newDataDir: string,
+): Promise<StorageOverview> {
+  if (!hasTauri()) {
+    return {
+      data_dir: newDataDir,
+      database_path: `${newDataDir}/iim.sqlite`,
+      database_key_path: `${newDataDir}/db.key.dpapi`,
+      database_key_protection: "Demo",
+      received_files_dir: `${newDataDir}/received_files`,
+      staged_files_dir: `${newDataDir}/staged`,
+      database_bytes: 0,
+      received_bytes: 0,
+      staged_bytes: 0,
+      transfer_task_count: 0,
+    };
+  }
+  return invoke("migrate_storage_directory", { newDataDir });
+}
+
+export async function restartApp(): Promise<void> {
+  if (!hasTauri()) return;
+  return invoke("restart_app");
 }
 
 export async function updateAppPreferences(

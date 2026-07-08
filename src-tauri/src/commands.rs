@@ -33,8 +33,8 @@ use crate::protocol::{
 use crate::screen_capture;
 use crate::staging::{self, StagedClipboardFile};
 use crate::store::{
-    default_data_dir, AppPreferences, ContactMetadata, ConversationDraft, ConversationSummary,
-    MessageDeliveryReceipt, TransferTask, TrustedPeer,
+    data_dir_config_path, default_data_dir, write_data_dir_config, AppPreferences, ContactMetadata,
+    ConversationDraft, ConversationSummary, MessageDeliveryReceipt, TransferTask, TrustedPeer,
 };
 use crate::store_key::store_key_path;
 use crate::transport::TransportConfig;
@@ -1997,6 +1997,14 @@ pub struct StorageOverview {
     pub transfer_task_count: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageMigrationProgress {
+    pub phase: String,
+    pub completed: u64,
+    pub total: u64,
+    pub current_path: String,
+}
+
 #[tauri::command]
 pub fn get_storage_overview(state: State<'_, AppState>) -> Result<StorageOverview, String> {
     let data_dir = default_data_dir();
@@ -2022,6 +2030,83 @@ pub fn get_storage_overview(state: State<'_, AppState>) -> Result<StorageOvervie
         staged_bytes: directory_size(&staged_files_dir),
         transfer_task_count,
     })
+}
+
+#[tauri::command]
+pub fn migrate_storage_directory(
+    app: tauri::AppHandle,
+    new_data_dir: String,
+) -> Result<StorageOverview, String> {
+    let current_dir = default_data_dir();
+    let target_dir = PathBuf::from(new_data_dir.trim());
+    if target_dir.as_os_str().is_empty() {
+        return Err("请选择新的数据目录".to_string());
+    }
+    if !target_dir.is_absolute() {
+        return Err("数据目录必须使用绝对路径".to_string());
+    }
+    let current_canonical = canonical_or_self(&current_dir);
+    let target_canonical = canonical_or_self(&target_dir);
+    if current_canonical == target_canonical {
+        return Err("新目录不能与当前数据目录相同".to_string());
+    }
+    if target_canonical.starts_with(&current_canonical) {
+        return Err("新目录不能放在当前数据目录内部".to_string());
+    }
+
+    std::fs::create_dir_all(&target_dir).map_err(|error| error.to_string())?;
+    let files = collect_files(&current_dir).map_err(|error| error.to_string())?;
+    let total = files.len() as u64;
+    emit_storage_migration_progress(&app, "preparing", 0, total, &target_dir);
+    for (index, source) in files.iter().enumerate() {
+        let relative = source
+            .strip_prefix(&current_dir)
+            .map_err(|error| error.to_string())?;
+        let destination = target_dir.join(relative);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::copy(source, &destination).map_err(|error| {
+            format!(
+                "copy {} to {}: {error}",
+                source.to_string_lossy(),
+                destination.to_string_lossy()
+            )
+        })?;
+        emit_storage_migration_progress(&app, "copying", (index + 1) as u64, total, &destination);
+    }
+    write_data_dir_config(&target_dir).map_err(|error| error.to_string())?;
+    emit_storage_migration_progress(&app, "switching", total, total, &data_dir_config_path());
+    Ok(storage_overview_for_dir(&target_dir, 0))
+}
+
+#[tauri::command]
+pub fn restart_app(app: tauri::AppHandle) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    std::process::Command::new(exe)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    app.exit(0);
+    Ok(())
+}
+
+fn storage_overview_for_dir(data_dir: &Path, transfer_task_count: usize) -> StorageOverview {
+    let database_path = data_dir.join("iim.sqlite");
+    let database_key_path = store_key_path(data_dir);
+    let received_files_dir = data_dir.join("received_files");
+    let staged_files_dir = data_dir.join("staged");
+    StorageOverview {
+        data_dir: data_dir.to_string_lossy().to_string(),
+        database_path: database_path.to_string_lossy().to_string(),
+        database_key_path: database_key_path.to_string_lossy().to_string(),
+        database_key_protection: database_key_protection().to_string(),
+        received_files_dir: received_files_dir.to_string_lossy().to_string(),
+        staged_files_dir: staged_files_dir.to_string_lossy().to_string(),
+        database_bytes: file_size(&database_path),
+        received_bytes: directory_size(&received_files_dir),
+        staged_bytes: directory_size(&staged_files_dir),
+        transfer_task_count,
+    }
 }
 
 fn database_key_protection() -> &'static str {
@@ -2079,6 +2164,51 @@ pub fn storage_location_path(kind: &str) -> Option<PathBuf> {
         "staged" => Some(data_dir.join("staged")),
         _ => None,
     }
+}
+
+fn canonical_or_self(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn collect_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if !root.exists() {
+        return Ok(files);
+    }
+    collect_files_inner(root, &mut files)?;
+    Ok(files)
+}
+
+fn collect_files_inner(path: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_files_inner(&path, files)?;
+        } else if file_type.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn emit_storage_migration_progress(
+    app: &tauri::AppHandle,
+    phase: &str,
+    completed: u64,
+    total: u64,
+    current_path: &Path,
+) {
+    let _ = app.emit(
+        "storage:migration_progress",
+        StorageMigrationProgress {
+            phase: phase.to_string(),
+            completed,
+            total,
+            current_path: current_path.to_string_lossy().to_string(),
+        },
+    );
 }
 
 fn directory_size(path: &Path) -> u64 {

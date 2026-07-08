@@ -2817,10 +2817,46 @@ fn default_store_path() -> anyhow::Result<PathBuf> {
 }
 
 pub fn default_data_dir() -> PathBuf {
+    configured_data_dir().unwrap_or_else(default_config_dir)
+}
+
+pub fn default_config_dir() -> PathBuf {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join("IIM")
+}
+
+fn storage_config_path() -> PathBuf {
+    default_config_dir().join("storage.json")
+}
+
+fn configured_data_dir() -> Option<PathBuf> {
+    let bytes = std::fs::read(storage_config_path()).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let data_dir = value.get("data_dir")?.as_str()?.trim();
+    if data_dir.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(data_dir))
+}
+
+pub fn write_data_dir_config(data_dir: &Path) -> anyhow::Result<()> {
+    let config_dir = default_config_dir();
+    std::fs::create_dir_all(&config_dir)?;
+    let path = storage_config_path();
+    let temp = path.with_extension("json.tmp");
+    let payload = serde_json::json!({
+        "data_dir": data_dir.to_string_lossy(),
+        "updated_at": Utc::now().timestamp()
+    });
+    std::fs::write(&temp, serde_json::to_vec_pretty(&payload)?)?;
+    std::fs::rename(temp, path)?;
+    Ok(())
+}
+
+pub fn data_dir_config_path() -> PathBuf {
+    storage_config_path()
 }
 
 #[cfg(test)]

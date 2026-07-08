@@ -126,7 +126,7 @@ function imageMessage(): ChatMessage {
 }
 
 describe("Inspector tabs", () => {
-  it("offers the network status tab from a direct conversation", async () => {
+  it("keeps direct conversation tabs limited to details and files", async () => {
     const tabChange = vi.fn();
     render(Inspector, {
       props: {
@@ -135,12 +135,16 @@ describe("Inspector tabs", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("tab", { name: "网络" }));
+    expect(screen.getByRole("tab", { name: "详情" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "文件" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "网络" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "存储" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "安全" })).not.toBeInTheDocument();
 
-    expect(tabChange).toHaveBeenCalledWith("network");
+    expect(tabChange).not.toHaveBeenCalled();
   });
 
-  it("offers the storage tab from a direct conversation", async () => {
+  it("opens the files tab from a direct conversation", async () => {
     const tabChange = vi.fn();
     render(Inspector, {
       props: {
@@ -149,12 +153,12 @@ describe("Inspector tabs", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("tab", { name: "存储" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "文件" }));
 
-    expect(tabChange).toHaveBeenCalledWith("storage");
+    expect(tabChange).toHaveBeenCalledWith("transfers");
   });
 
-  it("offers the network status tab from a group conversation", async () => {
+  it("keeps group conversation tabs limited to members and files", async () => {
     const tabChange = vi.fn();
     render(Inspector, {
       props: {
@@ -164,12 +168,15 @@ describe("Inspector tabs", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("tab", { name: "网络" }));
+    expect(screen.getByRole("tab", { name: "成员" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "文件" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "网络" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "存储" })).not.toBeInTheDocument();
 
-    expect(tabChange).toHaveBeenCalledWith("network");
+    expect(tabChange).not.toHaveBeenCalled();
   });
 
-  it("copies the direct peer fingerprint from the security tab", async () => {
+  it("falls back to conversation details when a removed security tab is requested", async () => {
     const copyIdentityValue = vi.fn();
     render(Inspector, {
       props: {
@@ -180,14 +187,10 @@ describe("Inspector tabs", () => {
       },
     });
 
-    await fireEvent.click(
-      screen.getByRole("button", { name: "复制设备指纹" }),
-    );
-
-    expect(copyIdentityValue).toHaveBeenCalledWith(
-      "alice-fingerprint",
-      "Alice 设备指纹",
-    );
+    expect(screen.getByRole("heading", { name: "会话详情" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "安全指纹" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制设备指纹" })).not.toBeInTheDocument();
+    expect(copyIdentityValue).not.toHaveBeenCalled();
   });
 
   it("copies direct conversation peer endpoints from the details tab", async () => {
@@ -958,7 +961,7 @@ describe("Inspector tabs", () => {
     expect(screen.queryByText("other.zip")).not.toBeInTheDocument();
   });
 
-  it("shows actionable storage controls in the details sidebar", async () => {
+  it("does not show global storage controls in the conversation sidebar", async () => {
     const refreshStorage = vi.fn();
     const openStorage = vi.fn();
     const clearStagedFiles = vi.fn();
@@ -978,39 +981,21 @@ describe("Inspector tabs", () => {
       },
     });
 
-    expect(screen.getAllByText("Windows DPAPI").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("10.0 KB").length).toBeGreaterThan(0);
-    expect(screen.getByText("C:/iim/data/iim.sqlite")).toBeInTheDocument();
-    expect(screen.getByText("C:/iim/data/received_files")).toBeInTheDocument();
-
-    await fireEvent.click(
-      screen.getByRole("button", { name: "刷新存储信息" }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "打开接收目录" }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "复制接收目录路径" }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "复制存储诊断报告" }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "清理剪贴板暂存" }),
-    );
-
-    expect(refreshStorage).toHaveBeenCalledOnce();
-    expect(openStorage).toHaveBeenCalledWith("received");
-    expect(copyStoragePath).toHaveBeenCalledWith("C:/iim/data/received_files", "接收目录路径");
-    expect(copyStorageDiagnostics).toHaveBeenCalledTimes(1);
-    expect(copyStorageDiagnostics.mock.calls[0][0]).toContain("灵犀内网通存储诊断");
-    expect(copyStorageDiagnostics.mock.calls[0][0]).toContain("数据库：C:/iim/data/iim.sqlite");
-    expect(clearStagedFiles).toHaveBeenCalledOnce();
+    expect(screen.getByRole("heading", { name: "会话详情" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "存储" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Windows DPAPI")).not.toBeInTheDocument();
+    expect(screen.queryByText("C:/iim/data/iim.sqlite")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "刷新存储信息" })).not.toBeInTheDocument();
+    expect(refreshStorage).not.toHaveBeenCalled();
+    expect(openStorage).not.toHaveBeenCalled();
+    expect(copyStoragePath).not.toHaveBeenCalled();
+    expect(copyStorageDiagnostics).not.toHaveBeenCalled();
+    expect(clearStagedFiles).not.toHaveBeenCalled();
   });
 });
 
 describe("Inspector network warnings", () => {
-  it("shows invalid network input warnings in the network sidebar", () => {
+  it("does not show invalid network input warnings in the conversation sidebar", () => {
     render(Inspector, {
       props: {
         settings,
@@ -1019,12 +1004,13 @@ describe("Inspector network warnings", () => {
       },
     });
 
+    expect(screen.getByRole("heading", { name: "会话详情" })).toBeInTheDocument();
     expect(
-      screen.getByText("已忽略无效网络配置：扫描网段 10.0.0.0/8"),
-    ).toBeInTheDocument();
+      screen.queryByText("已忽略无效网络配置：扫描网段 10.0.0.0/8"),
+    ).not.toBeInTheDocument();
   });
 
-  it("shows recent network warnings as a troubleshooting list", () => {
+  it("does not show recent network warnings as a troubleshooting list", () => {
     render(Inspector, {
       props: {
         settings,
@@ -1033,12 +1019,13 @@ describe("Inspector network warnings", () => {
       },
     });
 
-    const warnings = screen.getByRole("list", { name: "最近网络告警" });
-    expect(within(warnings).getByText("文件公告未同步")).toBeInTheDocument();
-    expect(within(warnings).getByText("群聊邀请未广播")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "会话详情" })).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "最近网络告警" })).not.toBeInTheDocument();
+    expect(screen.queryByText("文件公告未同步")).not.toBeInTheDocument();
+    expect(screen.queryByText("群聊邀请未广播")).not.toBeInTheDocument();
   });
 
-  it("copies a network diagnostic report from the network sidebar", async () => {
+  it("does not copy a network diagnostic report from the conversation sidebar", async () => {
     const copyNetworkDiagnostics = vi.fn();
     render(Inspector, {
       props: {
@@ -1057,16 +1044,8 @@ describe("Inspector network warnings", () => {
       },
     });
 
-    await fireEvent.click(
-      screen.getByRole("button", { name: "复制网络诊断报告" }),
-    );
-
-    expect(copyNetworkDiagnostics).toHaveBeenCalledTimes(1);
-    const report = copyNetworkDiagnostics.mock.calls[0][0] as string;
-    expect(report).toContain("灵犀内网通网络诊断");
-    expect(report).toContain("自动发现：关闭");
-    expect(report).toContain("种子节点：192.168.1.20");
-    expect(report).toContain("扫描网段：192.168.1.0/24");
-    expect(report).toContain("最近警告：UDP broadcast failed");
+    expect(screen.getByRole("heading", { name: "会话详情" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "复制网络诊断报告" })).not.toBeInTheDocument();
+    expect(copyNetworkDiagnostics).not.toHaveBeenCalled();
   });
 });

@@ -7,14 +7,14 @@
   import Sun from "lucide-svelte/icons/sun";
   import Users from "lucide-svelte/icons/users";
 
-  export type Section = "messages" | "contacts" | "files" | "settings" | "search";
+  export type Section = "messages" | "contacts" | "files" | "settings" | "notifications" | "search";
 
   export let activeSection: Section = "messages";
   export let dark = false;
   export let notificationReady = false;
   export let unreadCount = 0;
   export let onSelect: (section: Section) => void = () => {};
-  export let onOpenNotificationSettings: () => void = () => onSelect("settings");
+  export let onOpenNotifications: () => void = () => onSelect("notifications");
   export let onToggleTheme: () => void = () => {};
 
   $: unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
@@ -47,7 +47,15 @@
     </button>
   {/each}
 
-  <button class:ready={notificationReady} class="rail-button" type="button" title="通知状态" on:click={onOpenNotificationSettings}>
+  <button
+    class:active={activeSection === "notifications"}
+    class:ready={notificationReady}
+    class="rail-button"
+    type="button"
+    title="通知"
+    aria-current={activeSection === "notifications" ? "page" : undefined}
+    on:click={onOpenNotifications}
+  >
     <Bell size={18} />
     <span>通知</span>
   </button>

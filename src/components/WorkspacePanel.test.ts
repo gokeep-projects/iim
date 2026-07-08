@@ -313,7 +313,7 @@ describe("WorkspacePanel settings", () => {
     expect(screen.getByText("15s")).toBeInTheDocument();
   });
 
-  it("edits advanced discovery timing values", async () => {
+  it("does not expose editable advanced discovery timing values", async () => {
     const intervalChange = vi.fn();
     const ttlChange = vi.fn();
     render(WorkspacePanel, {
@@ -328,15 +328,13 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    await fireEvent.input(screen.getByDisplayValue("3"), {
-      target: { value: "9" },
-    });
-    await fireEvent.input(screen.getByDisplayValue("15"), {
-      target: { value: "90" },
-    });
+    expect(screen.getByText("3s")).toBeInTheDocument();
+    expect(screen.getByText("15s")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("3")).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue("15")).not.toBeInTheDocument();
 
-    expect(intervalChange).toHaveBeenCalledWith("9");
-    expect(ttlChange).toHaveBeenCalledWith("90");
+    expect(intervalChange).not.toHaveBeenCalled();
+    expect(ttlChange).not.toHaveBeenCalled();
   });
 
   it("shows invalid network input warnings in advanced discovery settings", () => {
@@ -354,7 +352,7 @@ describe("WorkspacePanel settings", () => {
     ).toBeInTheDocument();
   });
 
-  it("explains that advanced discovery targets must stay on private networks", () => {
+  it("explains that network discovery uses default local-direct settings", () => {
     render(WorkspacePanel, {
       props: {
         section: "settings",
@@ -363,8 +361,10 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    expect(screen.getByText(/RFC1918 私网地址/)).toBeInTheDocument();
-    expect(screen.getByText(/单个扫描网段最多 1024 个主机/)).toBeInTheDocument();
+    expect(screen.getByText("默认内网直连")).toBeInTheDocument();
+    expect(screen.getByText(/联系人页就是设备发现与管理入口/)).toBeInTheDocument();
+    expect(screen.queryByText(/RFC1918/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/1024/)).not.toBeInTheDocument();
   });
 
   it("summarizes live discovery health in network settings", () => {
@@ -388,11 +388,10 @@ describe("WorkspacePanel settings", () => {
     });
 
     const health = screen.getByLabelText("发现健康摘要");
-    expect(health).toHaveTextContent("发现设备 3");
+    expect(health).toHaveTextContent("联系人 3");
     expect(health).toHaveTextContent("可联系 1");
-    expect(health).toHaveTextContent("自动发现 开启");
-    expect(health).toHaveTextContent("广播 关闭");
-    expect(health).toHaveTextContent("高级配置 2");
+    expect(health).toHaveTextContent("发现服务 默认");
+    expect(health).toHaveTextContent("连接方式 内网直连");
   });
 
   it("shows actionable diagnostics for network discovery risks", () => {
@@ -416,7 +415,7 @@ describe("WorkspacePanel settings", () => {
     const diagnostics = screen.getByLabelText("网络诊断建议");
     expect(diagnostics).toHaveTextContent("自动发现已关闭");
     expect(diagnostics).toHaveTextContent("没有发现可联系设备");
-    expect(diagnostics).toHaveTextContent("缺少跨网段目标");
+    expect(diagnostics).toHaveTextContent("默认发现受限");
     expect(diagnostics).toHaveTextContent("最近网络警告");
     expect(diagnostics).toHaveTextContent(
       "QUIC send failed to 192.168.1.20:24251",
@@ -448,7 +447,7 @@ describe("WorkspacePanel settings", () => {
       expect.stringContaining("自动发现：关闭"),
     );
     expect(copyNetworkDiagnostics).toHaveBeenCalledWith(
-      expect.stringContaining("192.168.1.20:24251"),
+      expect.stringContaining("默认发现受限"),
     );
     expect(copyNetworkDiagnostics).toHaveBeenCalledWith(
       expect.stringContaining("UDP broadcast failed"),
@@ -467,11 +466,11 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    const discoveryParameters = screen.getByLabelText("网络发现参数");
-    expect(discoveryParameters).toHaveTextContent("25251/QUIC");
-    expect(discoveryParameters).toHaveTextContent("可靠重试 15s");
-    expect(discoveryParameters).toHaveTextContent("最大尝试 9 次");
-    expect(discoveryParameters).toHaveTextContent("重试批量 25");
+    const networkStatus = screen.getByLabelText("网络状态");
+    expect(networkStatus).toHaveTextContent("25251/QUIC");
+    expect(networkStatus).toHaveTextContent("可靠重试 15s");
+    expect(networkStatus).toHaveTextContent("最大尝试 9 次");
+    expect(networkStatus).toHaveTextContent("重试批量 25");
 
     const diagnostics = screen.getByLabelText("网络诊断建议");
     await fireEvent.click(within(diagnostics).getByRole("button", { name: "复制诊断报告" }));
@@ -1309,7 +1308,7 @@ describe("WorkspacePanel contacts empty state", () => {
     expect(within(profile).queryByRole("heading", { name: "Alice" })).not.toBeInTheDocument();
   });
 
-  it("offers a direct action to open network discovery settings", async () => {
+  it("does not offer network discovery configuration from empty contacts", () => {
     const openSettingsTab = vi.fn();
     render(WorkspacePanel, {
       props: {
@@ -1320,8 +1319,8 @@ describe("WorkspacePanel contacts empty state", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "配置网络发现" }));
-
-    expect(openSettingsTab).toHaveBeenCalledWith("network");
+    expect(screen.queryByRole("button", { name: "配置网络发现" })).not.toBeInTheDocument();
+    expect(screen.getByText(/暂无联系人/)).toBeInTheDocument();
+    expect(openSettingsTab).not.toHaveBeenCalled();
   });
 });

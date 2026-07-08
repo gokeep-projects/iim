@@ -6,6 +6,8 @@
   import BellRing from "lucide-svelte/icons/bell-ring";
   import CalendarDays from "lucide-svelte/icons/calendar-days";
   import CheckSquare from "lucide-svelte/icons/check-square";
+  import ChevronDown from "lucide-svelte/icons/chevron-down";
+  import ChevronUp from "lucide-svelte/icons/chevron-up";
   import Clipboard from "lucide-svelte/icons/clipboard";
   import Copy from "lucide-svelte/icons/copy";
   import ExternalLink from "lucide-svelte/icons/external-link";
@@ -14,10 +16,12 @@
   import FolderOpen from "lucide-svelte/icons/folder-open";
   import Image from "lucide-svelte/icons/image";
   import Info from "lucide-svelte/icons/info";
+  import MoreHorizontal from "lucide-svelte/icons/more-horizontal";
   import MousePointer2 from "lucide-svelte/icons/mouse-pointer-2";
   import Paperclip from "lucide-svelte/icons/paperclip";
   import Pin from "lucide-svelte/icons/pin";
   import PinOff from "lucide-svelte/icons/pin-off";
+  import RefreshCw from "lucide-svelte/icons/refresh-cw";
   import Scissors from "lucide-svelte/icons/scissors";
   import Search from "lucide-svelte/icons/search";
   import Send from "lucide-svelte/icons/send";
@@ -119,6 +123,7 @@
 
   let dragging = false;
   let emojiOpen = false;
+  let moreToolsOpen = false;
   let textareaElement: HTMLTextAreaElement | null = null;
   let conversationSearchInputElement: HTMLInputElement | null = null;
   let conversationSearchDateElement: HTMLInputElement | null = null;
@@ -378,6 +383,7 @@
   function closeComposerOverlays() {
     composerMenu = null;
     emojiOpen = false;
+    moreToolsOpen = false;
     closeMentionPanel();
   }
 
@@ -889,8 +895,14 @@
           placeholder="搜索当前会话"
           on:input={(event) => onConversationSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
         />
-        <button type="submit">搜索</button>
-        <button type="button" disabled={!conversationSearchQuery && !conversationSearchDate && conversationSearchResults.length === 0} on:click={onClearConversationSearch}>清空搜索</button>
+        <button type="submit">
+          <Search size={13} />
+          搜索
+        </button>
+        <button type="button" disabled={!conversationSearchQuery && !conversationSearchDate && conversationSearchResults.length === 0} on:click={onClearConversationSearch}>
+          <X size={13} />
+          清空搜索
+        </button>
         <button class="icon-button" type="button" title="关闭搜索" on:click={onToggleConversationSearch}>
           <X size={15} />
         </button>
@@ -904,7 +916,10 @@
           value={conversationSearchDate}
           on:input={(event) => onConversationSearchDateChange((event.currentTarget as HTMLInputElement).value)}
         />
-        <button type="button" disabled={!conversationSearchDate} on:click={onRunConversationDateJump}>跳转日期</button>
+        <button type="button" disabled={!conversationSearchDate} on:click={onRunConversationDateJump}>
+          <CalendarDays size={13} />
+          跳转日期
+        </button>
       </div>
       <div class="conversation-search-summary-row">
         <div class="conversation-search-summary" role="status">{conversationSearchSummary}</div>
@@ -914,6 +929,7 @@
             disabled={conversationSearchResults.length === 0}
             on:click={() => focusConversationSearchOffset(-1)}
           >
+            <ChevronUp size={13} />
             上一个
           </button>
           <button
@@ -921,6 +937,7 @@
             disabled={conversationSearchResults.length === 0}
             on:click={() => focusConversationSearchOffset(1)}
           >
+            <ChevronDown size={13} />
             下一个
           </button>
         </div>
@@ -987,7 +1004,10 @@
             <Trash2 size={14} />
             删除
           </button>
-          <button type="button" on:click={onCancelMessageSelection}>取消</button>
+          <button type="button" on:click={onCancelMessageSelection}>
+            <X size={14} />
+            取消
+          </button>
         </div>
       </section>
     {/if}
@@ -1140,11 +1160,23 @@
                     </div>
                     <div class="attachment-actions">
                       {#if imageFile}
-                        <button type="button" on:click|stopPropagation={() => openImagePreview(attachment)}>预览</button>
+                        <button class="attachment-action" type="button" on:click|stopPropagation={() => openImagePreview(attachment)}>
+                          <Image size={13} />
+                          预览
+                        </button>
                       {/if}
-                      <button type="button" on:click|stopPropagation={() => copyAttachmentFiles(attachment)}>复制清单</button>
-                      <button type="button" on:click={() => onOpenTransfer(attachment.manifest.transfer_id)}>打开</button>
-                      <button type="button" on:click={onShowTransfers}>传输</button>
+                      <button class="attachment-action" type="button" on:click|stopPropagation={() => copyAttachmentFiles(attachment)}>
+                        <Copy size={13} />
+                        复制清单
+                      </button>
+                      <button class="attachment-action" type="button" on:click={() => onOpenTransfer(attachment.manifest.transfer_id)}>
+                        <ExternalLink size={13} />
+                        打开
+                      </button>
+                      <button class="attachment-action" type="button" on:click={onShowTransfers}>
+                        <UploadCloud size={13} />
+                        传输
+                      </button>
                     </div>
                     </article>
                   {/if}
@@ -1183,6 +1215,7 @@
                   type="button"
                   on:click|stopPropagation={() => onRetryMessage(message)}
                 >
+                  <RefreshCw size={12} />
                   {retryActionLabel(message)}
                 </button>
               {/if}
@@ -1247,7 +1280,10 @@
           <strong>引用回复 · {senderLabel(replyQuote.sender_id)}</strong>
           <span>{replyQuote.body_preview}</span>
         </div>
-        <button type="button" on:click={onClearReplyQuote} title="取消引用">取消</button>
+        <button class="row-action" type="button" on:click={onClearReplyQuote} title="取消引用">
+          <X size={13} />
+          取消
+        </button>
       </div>
     {/if}
 
@@ -1259,7 +1295,10 @@
             <span>{pendingFileSizeLabel()}</span>
           </div>
           <div class="pending-file-actions">
-            <button type="button" on:click={onClearPendingFiles}>清空</button>
+            <button type="button" on:click={onClearPendingFiles}>
+              <Trash2 size={13} />
+              清空
+            </button>
             <button
               class="primary-mini"
               type="button"
@@ -1267,6 +1306,7 @@
               disabled={fileActionsDisabled}
               on:click={sendPendingFiles}
             >
+              <Send size={13} />
               发送
             </button>
           </div>
@@ -1323,7 +1363,8 @@
 
     <div class="quick-row">
       {#each quickReplies as reply}
-        <button type="button" title={sendDisabledReason || reply} disabled={Boolean(sendDisabledReason)} on:click={() => sendQuickReply(reply)}>
+        <button class="quick-reply-chip" type="button" title={sendDisabledReason || reply} disabled={Boolean(sendDisabledReason)} on:click={() => sendQuickReply(reply)}>
+          <Send size={12} />
           {reply}
         </button>
       {/each}
@@ -1344,34 +1385,12 @@
         <button
           class="tool-button composer-tool-button"
           type="button"
-          title={fileActionsDisabled ? fileActionsDisabledReason : "发送文件夹"}
-          disabled={fileActionsDisabled}
-          on:click={chooseDesktopFolder}
-        >
-          <Folder size={15} />
-          <span class="composer-tool-label">文件夹</span>
-        </button>
-        <button
-          class="tool-button composer-tool-button"
-          type="button"
           title={fileActionsDisabled ? fileActionsDisabledReason : "截图后粘贴发送"}
           disabled={fileActionsDisabled}
           on:click={startScreenshot}
         >
           <Image size={15} />
           <span class="composer-tool-label">截图</span>
-        </button>
-      </div>
-      <div class="toolbar-group" role="group" aria-label="消息工具">
-        <button
-          class="tool-button composer-tool-button"
-          type="button"
-          title="抖一抖提醒对方"
-          disabled={Boolean(sendDisabledReason)}
-          on:click={sendNudge}
-        >
-          <BellRing size={15} />
-          <span class="composer-tool-label">抖一抖</span>
         </button>
         <button
           class:active={emojiOpen}
@@ -1385,6 +1404,42 @@
         >
           <Smile size={15} />
           <span class="composer-tool-label">表情</span>
+        </button>
+        <button
+          class:active={moreToolsOpen}
+          class="tool-button composer-tool-button"
+          type="button"
+          title="更多工具"
+          on:click={(event) => {
+            event.stopPropagation();
+            moreToolsOpen = !moreToolsOpen;
+          }}
+        >
+          <MoreHorizontal size={15} />
+          <span class="composer-tool-label">更多</span>
+        </button>
+      </div>
+      {#if moreToolsOpen}
+      <div class="toolbar-group toolbar-more-popover" role="group" aria-label="更多消息工具">
+        <button
+          class="tool-button composer-tool-button"
+          type="button"
+          title={fileActionsDisabled ? fileActionsDisabledReason : "发送文件夹"}
+          disabled={fileActionsDisabled}
+          on:click={chooseDesktopFolder}
+        >
+          <Folder size={15} />
+          <span class="composer-tool-label">文件夹</span>
+        </button>
+        <button
+          class="tool-button composer-tool-button"
+          type="button"
+          title="抖一抖提醒对方"
+          disabled={Boolean(sendDisabledReason)}
+          on:click={sendNudge}
+        >
+          <BellRing size={15} />
+          <span class="composer-tool-label">抖一抖</span>
         </button>
         <button
           class="tool-button composer-tool-button"
@@ -1417,8 +1472,6 @@
           <CheckSquare size={15} />
           <span class="composer-tool-label">多选</span>
         </button>
-      </div>
-      <div class="toolbar-group" role="group" aria-label="会话工具">
         <button class="tool-button composer-tool-button" type="button" title="传输列表" on:click={onShowTransfers}>
           <FileText size={15} />
           <span class="composer-tool-label">传输</span>
@@ -1472,6 +1525,7 @@
           {/if}
         </button>
       </div>
+      {/if}
       <span class="composer-drop-hint">
         <Paperclip size={14} />
         拖拽或粘贴文件/图片到输入区
@@ -1538,7 +1592,7 @@
             <strong>{imagePreview.title}</strong>
             <small>{imagePreview.summary}</small>
           </div>
-          <button type="button" title="关闭图片预览" on:click={closeImagePreview}>
+          <button class="icon-button" type="button" title="关闭图片预览" aria-label="关闭图片预览" on:click={closeImagePreview}>
             <X size={16} />
           </button>
         </header>
@@ -1546,8 +1600,14 @@
           <img src={imagePreview.src} alt={imagePreview.title} />
         </div>
         <footer>
-          <button type="button" on:click={() => onOpenTransfer(imagePreview?.transferId ?? "")}>打开所在目录</button>
-          <button type="button" on:click={closeImagePreview}>关闭</button>
+          <button class="row-action" type="button" on:click={() => onOpenTransfer(imagePreview?.transferId ?? "")}>
+            <FolderOpen size={13} />
+            打开所在目录
+          </button>
+          <button class="row-action" type="button" on:click={closeImagePreview}>
+            <X size={13} />
+            关闭
+          </button>
         </footer>
       </div>
     </div>

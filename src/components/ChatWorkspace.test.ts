@@ -12,6 +12,12 @@ vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (path: string) => `asset://${path}`,
 }));
 
+async function openMoreTools() {
+  const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
+  await fireEvent.click(within(toolbar).getByRole("button", { name: "更多" }));
+  return within(toolbar).getByRole("group", { name: "更多消息工具" });
+}
+
 function transferMessage(): ChatMessage {
   return {
     id: "msg-file",
@@ -195,12 +201,7 @@ describe("ChatWorkspace attachments", () => {
       within(banner).queryByRole("button", { name: "查看群资料" }),
     ).not.toBeInTheDocument();
 
-    await fireEvent.click(
-      within(screen.getByRole("toolbar", { name: "消息工具栏" })).getByRole(
-        "button",
-        { name: "成员" },
-      ),
-    );
+    await fireEvent.click(within(await openMoreTools()).getByRole("button", { name: "成员" }));
     expect(showDetails).toHaveBeenCalledTimes(1);
   });
 
@@ -392,7 +393,7 @@ describe("ChatWorkspace attachments", () => {
 
     const screenshotButton = screen.getByRole("button", { name: "截图" });
     const fileButton = screen.getByRole("button", { name: "文件" });
-    const folderButton = screen.getByRole("button", { name: "文件夹" });
+    const folderButton = within(await openMoreTools()).getByRole("button", { name: "文件夹" });
     expect(fileButton).toBeDisabled();
     expect(folderButton).toBeDisabled();
     expect(screenshotButton).toBeDisabled();
@@ -621,22 +622,16 @@ describe("ChatWorkspace composer toolbar", () => {
     expect(
       within(toolbar).getByRole("group", { name: "附件工具" }),
     ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("group", { name: "消息工具" }),
-    ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("group", { name: "会话工具" }),
-    ).toBeInTheDocument();
+    expect(within(toolbar).queryByRole("group", { name: "消息工具" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("group", { name: "会话工具" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "传输" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 
-    await fireEvent.click(
-      within(toolbar).getByRole("button", { name: "搜索" }),
-    );
-    await fireEvent.click(
-      within(toolbar).getByRole("button", { name: "传输" }),
-    );
-    await fireEvent.click(
-      within(toolbar).getByRole("button", { name: "详情" }),
-    );
+    const moreTools = await openMoreTools();
+    await fireEvent.click(within(moreTools).getByRole("button", { name: "搜索" }));
+    await fireEvent.click(within(moreTools).getByRole("button", { name: "传输" }));
+    await fireEvent.click(within(moreTools).getByRole("button", { name: "详情" }));
 
     expect(toggleSearch).toHaveBeenCalledTimes(1);
     expect(showTransfers).toHaveBeenCalledTimes(1);
@@ -651,23 +646,17 @@ describe("ChatWorkspace composer toolbar", () => {
       within(toolbar).getByRole("button", { name: "文件" }),
     ).toBeInTheDocument();
     expect(
-      within(toolbar).getByRole("button", { name: "文件夹" }),
-    ).toBeInTheDocument();
+      within(toolbar).queryByRole("button", { name: "文件夹" }),
+    ).not.toBeInTheDocument();
     expect(
       within(toolbar).getByRole("button", { name: "截图" }),
     ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("button", { name: "抖一抖" }),
-    ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("button", { name: "搜索" }),
-    ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("button", { name: "传输" }),
-    ).toBeInTheDocument();
-    expect(
-      within(toolbar).getByRole("button", { name: "详情" }),
-    ).toBeInTheDocument();
+    expect(within(toolbar).getByRole("button", { name: "表情" })).toBeInTheDocument();
+    expect(within(toolbar).getByRole("button", { name: "更多" })).toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "抖一抖" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "传输" })).not.toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 
     const inputRow = document.querySelector(".composer-input-row");
     expect(inputRow).toBeTruthy();
@@ -684,7 +673,7 @@ describe("ChatWorkspace composer toolbar", () => {
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
     const buttons = within(toolbar).getAllByRole("button");
 
-    expect(buttons.length).toBeGreaterThanOrEqual(10);
+    expect(buttons.length).toBe(4);
     for (const button of buttons) {
       expect(button).toHaveClass("composer-tool-button");
       expect(button).toHaveAttribute("title");
@@ -701,8 +690,7 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
-    const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
-    const nudgeButton = within(toolbar).getByRole("button", { name: "抖一抖" });
+    const nudgeButton = within(await openMoreTools()).getByRole("button", { name: "抖一抖" });
 
     expect(nudgeButton).toBeDisabled();
     await fireEvent.click(nudgeButton);
@@ -717,12 +705,7 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
-    await fireEvent.click(
-      within(screen.getByRole("toolbar", { name: "消息工具栏" })).getByRole(
-        "button",
-        { name: "抖一抖" },
-      ),
-    );
+    await fireEvent.click(within(await openMoreTools()).getByRole("button", { name: "抖一抖" }));
 
     expect(sendNudge).toHaveBeenCalledTimes(1);
   });
@@ -779,7 +762,7 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
-    const conversationTools = screen.getByRole("group", { name: "会话工具" });
+    const conversationTools = await openMoreTools();
     await fireEvent.click(
       within(conversationTools).getByRole("button", { name: "取消置顶" }),
     );
@@ -811,7 +794,7 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
-    const conversationTools = screen.getByRole("group", { name: "会话工具" });
+    const conversationTools = await openMoreTools();
     const detailButton = within(conversationTools).getByRole("button", { name: "详情" });
     const pinButton = within(conversationTools).getByRole("button", { name: "置顶" });
     const muteButton = within(conversationTools).getByRole("button", { name: "免打扰" });
@@ -847,7 +830,7 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
-    const messageTools = screen.getByRole("group", { name: "消息工具" });
+    const messageTools = await openMoreTools();
     const searchButton = within(messageTools).getByRole("button", { name: "搜索" });
     const dateButton = within(messageTools).getByRole("button", { name: "日期" });
     const selectionButton = within(messageTools).getByRole("button", { name: "多选" });
@@ -1113,10 +1096,7 @@ describe("ChatWorkspace conversation search", () => {
       },
     });
 
-    const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
-    await fireEvent.click(
-      within(toolbar).getByRole("button", { name: "日期" }),
-    );
+    await fireEvent.click(within(await openMoreTools()).getByRole("button", { name: "日期" }));
 
     expect(openDateJump).toHaveBeenCalledTimes(1);
   });

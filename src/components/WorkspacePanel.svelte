@@ -19,7 +19,7 @@
   import Trash2 from "lucide-svelte/icons/trash-2";
   import UploadCloud from "lucide-svelte/icons/upload-cloud";
   import Users from "lucide-svelte/icons/users";
-  import { defaultTransportConfig, type ChatMessage, type ContactMetadata, type NetworkSettings, type PeerProfile, type PeerStatus, type StorageOverview, type TransferTask, type TransportConfig, type TrustedPeer } from "../api";
+  import { defaultTransportConfig, type ChatMessage, type ContactMetadata, type NetworkSettings, type PeerProfile, type PeerStatus, type StorageMigrationProgress, type StorageOverview, type TransferTask, type TransportConfig, type TrustedPeer } from "../api";
   import type { Section } from "./Rail.svelte";
 
   type SettingsTab = "profile" | "network" | "storage" | "security" | "preferences";
@@ -40,10 +40,6 @@
   export let query = "";
   export let settings: NetworkSettings;
   export let transportConfig: TransportConfig = defaultTransportConfig;
-  export let seedText = "";
-  export let rangeText = "";
-  export let discoveryIntervalText = "3";
-  export let peerTtlText = "15";
   export let transferTasks: TransferTask[] = [];
   export let profileName = "";
   export let profileHostname = "";
@@ -60,6 +56,8 @@
   export let networkInputWarning = "";
   export let networkWarnings: string[] = [];
   export let storageOverview: StorageOverview | null = null;
+  export let storageMigrationProgress: StorageMigrationProgress | null = null;
+  export let storageMigrationActive = false;
   export let trustedPeers: TrustedPeer[] = [];
   export let settingsTab: SettingsTab = "profile";
   export let onTogglePeer: (peerId: string) => void = () => {};
@@ -68,15 +66,9 @@
   export let onMessageContext: (message: ChatMessage, event: MouseEvent) => void = () => {};
   export let onRetryOutboxMessages: () => void | Promise<void> = () => {};
   export let onCreateGroup: () => void | Promise<void> = () => {};
+  export let onRefreshPeers: () => void | Promise<void> = () => {};
   export let onSearch: () => void | Promise<void> = () => {};
   export let onRefreshFavorites: () => void | Promise<void> = () => {};
-  export let onToggleAutoDiscovery: () => void | Promise<void> = () => {};
-  export let onToggleMulticast: () => void | Promise<void> = () => {};
-  export let onSeedTextChange: (value: string) => void = () => {};
-  export let onRangeTextChange: (value: string) => void = () => {};
-  export let onDiscoveryIntervalTextChange: (value: string) => void = () => {};
-  export let onPeerTtlTextChange: (value: string) => void = () => {};
-  export let onSaveNetwork: () => void | Promise<void> = () => {};
   export let onCopyNetworkDiagnostics: (report: string) => void | Promise<void> = () => {};
   export let onTrustPeer: (peer?: PeerProfile | null) => void | Promise<void> = () => {};
   export let onRemoveTrustedPeer: (peerId: string) => void | Promise<void> = () => {};
@@ -93,6 +85,7 @@
   export let onTogglePrivacyMode: () => void | Promise<void> = () => {};
   export let onToggleCloseToTray: () => void | Promise<void> = () => {};
   export let onRefreshStorage: () => void | Promise<void> = () => {};
+  export let onMigrateStorageDirectory: () => void | Promise<void> = () => {};
   export let onClearStagedFiles: () => void | Promise<void> = () => {};
   export let onOpenStorage: (kind: "data" | "received" | "staged") => void | Promise<void> = () => {};
   export let onCopyStoragePath: (path: string, label: string) => void | Promise<void> = () => {};
@@ -239,8 +232,6 @@
       `局域网广播：${settings.multicast ? "开启" : "关闭"}`,
       `发现设备：${discoveredPeerCount}`,
       `可联系设备：${onlinePeerCount}`,
-      `种子节点：${settings.seed_peers.join(", ") || "无"}`,
-      `扫描网段：${settings.scan_ranges.join(", ") || "无"}`,
       `发现间隔：${settings.discovery_interval_secs}s`,
       `离线判定：${settings.peer_ttl_secs}s`,
       `QUIC 监听端口：${transportConfig.listen_port}`,
@@ -577,7 +568,6 @@
   $: transferTotalBytes = transferTasks.reduce((sum, task) => sum + task.totalBytes, 0);
   $: discoveredPeerCount = peers.length;
   $: onlinePeerCount = peers.filter((peer) => peer.status === "online").length;
-  $: advancedDiscoveryCount = settings.seed_peers.length + settings.scan_ranges.length;
   $: latestNetworkWarning = networkWarnings[0] ?? "";
   $: networkDiagnostics = [
     {
@@ -588,16 +578,14 @@
     {
       tone: onlinePeerCount > 0 ? "ok" : "warning",
       title: onlinePeerCount > 0 ? `可联系设备 ${onlinePeerCount} 台` : "没有发现可联系设备",
-      detail: onlinePeerCount > 0 ? "已发现可直连设备，可尝试发送消息或文件。" : "检查 Windows 防火墙、同网段连接，或在高级配置中加入种子节点。"
+      detail: onlinePeerCount > 0 ? "已发现可直连设备，可尝试发送消息或文件。" : "检查 Windows 防火墙、确认双方同网段，然后刷新联系人。"
     },
     {
-      tone: settings.multicast || advancedDiscoveryCount > 0 ? "ok" : "warning",
-      title: settings.multicast || advancedDiscoveryCount > 0 ? "发现目标已配置" : "缺少跨网段目标",
+      tone: settings.multicast ? "ok" : "warning",
+      title: settings.multicast ? "局域网发现就绪" : "默认发现受限",
       detail: settings.multicast
-        ? "局域网广播已开启；复杂企业网络可继续补充种子节点或扫描网段。"
-        : advancedDiscoveryCount > 0
-          ? "已配置种子节点或扫描网段，可用于广播不可达的网络。"
-          : "关闭广播时至少配置一个种子节点或扫描网段，否则只能依赖已缓存联系人。"
+        ? "同网段设备会自动出现在联系人列表，联系人页就是发现和管理入口。"
+        : "广播不可用时只能依赖已缓存联系人；请检查系统网络和防火墙策略。"
     },
     {
       tone: latestNetworkWarning ? "danger" : "ok",
@@ -623,12 +611,18 @@
           <p class="hint">{statusText}</p>
         {/if}
       </div>
-      <button class="tool-button" type="button" disabled={selectedPeerIds.length === 0} on:click={onCreateGroup}>
-        <Users size={15} />
-        创建群聊
-      </button>
+      <div class="workspace-head-actions">
+        <button class="tool-button" type="button" on:click={onRefreshPeers}>
+          <RefreshCw size={15} />
+          刷新设备
+        </button>
+        <button class="tool-button" type="button" disabled={selectedPeerIds.length === 0} on:click={onCreateGroup}>
+          <Users size={15} />
+          创建群聊
+        </button>
+      </div>
     </header>
-    <div class="contacts-layout">
+    <div class:empty={visiblePeers.length === 0} class="contacts-layout">
       <div class="contacts-directory">
         <div class="contact-directory-summary" aria-label="联系人概览">
           <span>全部 {visiblePeers.length}</span>
@@ -651,16 +645,29 @@
         </div>
 
         {#if visiblePeers.length === 0}
-          <div class="empty-action-note">
-            {#if hasContactFilters}
-              <p class="empty-note">没有匹配的联系人。可切换筛选条件或清空搜索关键字。</p>
-            {:else}
-              <p class="empty-note">暂无联系人。请检查防火墙，或在设置里的网络发现中配置种子节点和扫描网段。</p>
-              <button class="tool-button" type="button" on:click={() => onOpenSettingsTab("network")}>
-                <Network size={15} />
-                配置网络发现
+          <div class="empty-action-note contact-empty-panel">
+            <span class="empty-panel-icon">
+              <Network size={16} />
+            </span>
+            <div class="empty-panel-main">
+              {#if hasContactFilters}
+                <p class="empty-note">没有匹配的联系人。可切换筛选条件或清空搜索关键字。</p>
+                <small>当前筛选未命中任何设备</small>
+              {:else}
+                <p class="empty-note">暂无联系人。请检查防火墙、确认双方同网段，然后点击右上角“刷新设备”。</p>
+                <small>正在等待局域网发现结果</small>
+              {/if}
+            </div>
+            <div class="empty-panel-actions">
+              <button class="row-action" type="button" on:click={onRefreshPeers}>
+                <RefreshCw size={13} />
+                刷新
               </button>
-            {/if}
+              <button class="row-action" type="button" on:click={() => onOpenSettingsTab("network")}>
+                <Network size={13} />
+                网络
+              </button>
+            </div>
           </div>
         {/if}
 
@@ -754,13 +761,18 @@
                       >
                         <Ban size={15} />
                       </button>
-                      <button type="button" on:click={() => onSaveContactMetadata(peer.peer_id)}>保存</button>
+                      <button class="row-action" type="button" on:click={() => onSaveContactMetadata(peer.peer_id)}>
+                        <Save size={13} />
+                        保存
+                      </button>
                       <button
+                        class="row-action"
                         type="button"
                         aria-label={`和 ${peerLabel(peer)} 聊天`}
                         disabled={metadataFor(peer).blocked}
                         on:click={() => onSelectConversation(`direct:${peer.peer_id}`)}
                       >
+                        <MessageSquareText size={13} />
                         聊天
                       </button>
                     </div>
@@ -853,39 +865,59 @@
           </dl>
           <div class="contact-profile-actions">
             <button
-              class="wide-button"
+              class="contact-primary-action"
               type="button"
+              aria-label="发消息"
               disabled={metadataFor(focusedContact).blocked}
               on:click={() => onSelectConversation(`direct:${focusedContact.peer_id}`)}
             >
               <MessageSquareText size={15} />
-              发消息
+              <span>
+                <strong>发消息</strong>
+                <small>{metadataFor(focusedContact).blocked ? "已阻止联系人" : "打开直连会话"}</small>
+              </span>
             </button>
+            <div class="contact-action-grid">
+              <button class="action-card" type="button" aria-label="保存资料" on:click={() => onSaveContactMetadata(focusedContact.peer_id)}>
+                <Save size={15} />
+                <span>
+                  <strong>保存资料</strong>
+                  <small>备注与分组</small>
+                </span>
+              </button>
+              <button class="action-card" type="button" aria-label="信任设备" on:click={() => onTrustPeer(focusedContact)}>
+                <ShieldCheck size={15} />
+                <span>
+                  <strong>信任设备</strong>
+                  <small>确认指纹</small>
+                </span>
+              </button>
+              <button
+                class="action-card"
+                type="button"
+                aria-label="复制记录"
+                on:click={() => onCopyIdentityValue(contactAuditReport(focusedContact), `${peerLabel(focusedContact)} 联系人记录`)}
+              >
+                <Copy size={15} />
+                <span>
+                  <strong>复制记录</strong>
+                  <small>审计信息</small>
+                </span>
+              </button>
+            </div>
             <button
               class:danger={!metadataFor(focusedContact).blocked}
-              class="wide-button muted"
+              class="contact-danger-action"
               type="button"
+              aria-label={metadataFor(focusedContact).blocked ? "取消阻止" : "阻止联系人"}
               on:click={() =>
                 onContactMetadataChange(focusedContact.peer_id, { blocked: !metadataFor(focusedContact).blocked })}
             >
               <Ban size={15} />
-              {metadataFor(focusedContact).blocked ? "取消阻止" : "阻止联系人"}
-            </button>
-            <button class="wide-button muted" type="button" on:click={() => onSaveContactMetadata(focusedContact.peer_id)}>
-              <Save size={15} />
-              保存资料
-            </button>
-            <button class="wide-button muted" type="button" on:click={() => onTrustPeer(focusedContact)}>
-              <ShieldCheck size={15} />
-              信任设备
-            </button>
-            <button
-              class="wide-button muted"
-              type="button"
-              on:click={() => onCopyIdentityValue(contactAuditReport(focusedContact), `${peerLabel(focusedContact)} 联系人记录`)}
-            >
-              <Copy size={15} />
-              复制记录
+              <span>
+                <strong>{metadataFor(focusedContact).blocked ? "取消阻止" : "阻止联系人"}</strong>
+                <small>{metadataFor(focusedContact).blocked ? "恢复消息和发现" : "暂停与此联系人互动"}</small>
+              </span>
             </button>
           </div>
         {:else}
@@ -903,14 +935,16 @@
           <p class="hint">{statusText}</p>
         {/if}
       </div>
-      <button class="tool-button" type="button" on:click={onSearch}>
-        <Search size={15} />
-        重新搜索
-      </button>
-      <button class="tool-button" type="button" on:click={onRefreshFavorites}>
-        <Star size={15} />
-        刷新消息资料
-      </button>
+      <div class="workspace-head-actions">
+        <button class="tool-button" type="button" on:click={onSearch}>
+          <Search size={15} />
+          重新搜索
+        </button>
+        <button class="tool-button" type="button" on:click={onRefreshFavorites}>
+          <Star size={15} />
+          刷新消息资料
+        </button>
+      </div>
     </header>
     <div class="data-grid">
       {#each searchResults as message (message.id)}
@@ -919,7 +953,10 @@
             <strong>{messageResultPreview(message)}</strong>
             <small>{conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}</small>
           </div>
-          <button type="button" on:click={() => onOpenMessageResult(message)}>打开</button>
+          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
+            <MessageSquareText size={13} />
+            打开
+          </button>
         </article>
       {:else}
         <p class="empty-note">没有搜索结果。输入关键词后按 Enter 或点击搜索。</p>
@@ -937,7 +974,10 @@
             <strong>{messageResultPreview(message)}</strong>
             <small>{conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}</small>
           </div>
-          <button type="button" on:click={() => onOpenMessageResult(message)}>打开</button>
+          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
+            <MessageSquareText size={13} />
+            打开
+          </button>
         </article>
       {:else}
         <p class="empty-note">暂无收藏消息。可在聊天消息上右键选择“收藏消息”。</p>
@@ -953,9 +993,12 @@
           <CheckSquare size={15} />
           <div>
             <strong>{messageResultPreview(message)}</strong>
-            <small>{conversationLabel(message.conversation_id)} 路 {new Date(message.created_at).toLocaleString("zh-CN")}</small>
+            <small>{conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}</small>
           </div>
-          <button type="button" on:click={() => onOpenMessageResult(message)}>打开</button>
+          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
+            <MessageSquareText size={13} />
+            打开
+          </button>
         </article>
       {:else}
         <p class="empty-note">暂无待办消息。可在聊天消息上右键选择“加入待办”。</p>
@@ -966,7 +1009,10 @@
       <span class="section-heading-actions">
         <small>{outboxMessages.length}</small>
         {#if outboxMessages.length > 0}
-          <button type="button" on:click={onRetryOutboxMessages}>全部重试</button>
+          <button class="section-compact-action" type="button" on:click={onRetryOutboxMessages}>
+            <RefreshCw size={12} />
+            全部重试
+          </button>
         {/if}
       </span>
     </div>
@@ -981,7 +1027,10 @@
               · {conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}
             </small>
           </div>
-          <button type="button" on:click={() => onOpenMessageResult(message)}>打开</button>
+          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
+            <MessageSquareText size={13} />
+            打开
+          </button>
         </article>
       {:else}
         <p class="empty-note">暂无待发送或发送失败消息。</p>
@@ -1070,20 +1119,52 @@
                 <span style={`width: ${transferProgress(task)}%`}></span>
               </div>
               <div class="transfer-card-actions">
-                <button type="button" on:click={() => onOpenTransfer(task.id)}>定位</button>
-                <button type="button" aria-label={`复制 ${task.name} 传输任务 ID`} title={`复制 ${task.name} 传输任务 ID`} on:click={() => onCopyTransferId(task.id, `${task.name} 传输任务 ID`)}>
+                <button class="row-action" type="button" on:click={() => onOpenTransfer(task.id)}>
+                  <HardDrive size={13} />
+                  定位
+                </button>
+                <button class="row-action" type="button" aria-label={`复制 ${task.name} 传输任务 ID`} title={`复制 ${task.name} 传输任务 ID`} on:click={() => onCopyTransferId(task.id, `${task.name} 传输任务 ID`)}>
+                  <Copy size={13} />
                   复制 ID
                 </button>
-                <button type="button" aria-label={`复制 ${task.name} 传输记录`} title={`复制 ${task.name} 传输记录`} on:click={() => onCopyTransferDiagnostics(transferTaskDiagnosticReport(task))}>
+                <button class="row-action" type="button" aria-label={`复制 ${task.name} 传输记录`} title={`复制 ${task.name} 传输记录`} on:click={() => onCopyTransferDiagnostics(transferTaskDiagnosticReport(task))}>
+                  <Copy size={13} />
                   复制记录
                 </button>
-                <button type="button" on:click={() => onCancelTransfer(task.id)}>取消</button>
+                <button class="row-action danger" type="button" on:click={() => onCancelTransfer(task.id)}>
+                  <Trash2 size={13} />
+                  取消
+                </button>
               </div>
             </article>
           {:else}
-            <p class="empty-note">
-              {hasTransferFilters ? "没有匹配的活跃传输。" : "暂无活跃传输。可在聊天页拖拽文件，或点击输入框上方的“文件/文件夹”。"}
-            </p>
+            <div class="transfer-empty-panel">
+              <span class="empty-panel-icon">
+                <UploadCloud size={16} />
+              </span>
+              <div class="empty-panel-main">
+                <p class="empty-note">
+                  {hasTransferFilters ? "没有匹配的活跃传输。" : "暂无活跃传输。可在聊天页拖拽文件，或点击输入框上方的“文件/文件夹”。"}
+                </p>
+                <small>{hasTransferFilters ? "当前筛选未命中进行中的任务" : "等待新的文件发送或接收任务"}</small>
+              </div>
+              <div class="empty-panel-actions">
+                {#if hasTransferFilters}
+                  <button class="row-action" type="button" on:click={() => {
+                    transferQuery = "";
+                    transferStatusFilter = "all";
+                  }}>
+                    <RefreshCw size={13} />
+                    清空筛选
+                  </button>
+                {:else}
+                  <button class="row-action" type="button" on:click={() => onCopyTransferDiagnostics(transferDiagnosticReport())}>
+                    <Copy size={13} />
+                    诊断
+                  </button>
+                {/if}
+              </div>
+            </div>
           {/each}
         </div>
       </section>
@@ -1107,31 +1188,130 @@
                   <small class="transfer-error">本机缺少可重新广播的源文件或授权信息</small>
                 {/if}
               </div>
-              <span>{task.files.length} 个文件</span>
-              {#if canResumeTransfer(task)}
-                <button type="button" on:click={() => onResumeTransfer(task.id)}>重新广播</button>
-              {/if}
-              <button type="button" aria-label={`复制 ${task.name} 传输任务 ID`} title={`复制 ${task.name} 传输任务 ID`} on:click={() => onCopyTransferId(task.id, `${task.name} 传输任务 ID`)}>
-                复制 ID
-              </button>
-              <button type="button" aria-label={`复制 ${task.name} 传输记录`} title={`复制 ${task.name} 传输记录`} on:click={() => onCopyTransferDiagnostics(transferTaskDiagnosticReport(task))}>
-                复制记录
-              </button>
-              <button type="button" on:click={() => onOpenTransfer(task.id)}>定位</button>
-              <button type="button" on:click={() => onDeleteTransfer(task.id)}>删除</button>
+              <div class="transfer-task-actions" aria-label={`${task.name} 传输操作`}>
+                <span class="transfer-task-count">{task.files.length} 个文件</span>
+                {#if canResumeTransfer(task)}
+                  <button class="row-action" type="button" on:click={() => onResumeTransfer(task.id)}>
+                    <RefreshCw size={13} />
+                    重新广播
+                  </button>
+                {/if}
+                <button class="row-action" type="button" aria-label={`复制 ${task.name} 传输任务 ID`} title={`复制 ${task.name} 传输任务 ID`} on:click={() => onCopyTransferId(task.id, `${task.name} 传输任务 ID`)}>
+                  <Copy size={13} />
+                  复制 ID
+                </button>
+                <button class="row-action" type="button" aria-label={`复制 ${task.name} 传输记录`} title={`复制 ${task.name} 传输记录`} on:click={() => onCopyTransferDiagnostics(transferTaskDiagnosticReport(task))}>
+                  <Copy size={13} />
+                  复制记录
+                </button>
+                <button class="row-action" type="button" on:click={() => onOpenTransfer(task.id)}>
+                  <HardDrive size={13} />
+                  定位
+                </button>
+                <button class="row-action danger" type="button" on:click={() => onDeleteTransfer(task.id)}>
+                  <Trash2 size={13} />
+                  删除
+                </button>
+              </div>
             </article>
           {:else}
-            <p class="empty-note">{hasTransferFilters ? "没有匹配的历史传输记录。" : "暂无历史传输记录。"}</p>
+            <div class="transfer-empty-panel compact">
+              <span class="empty-panel-icon">
+                <HardDrive size={16} />
+              </span>
+              <div class="empty-panel-main">
+                <p class="empty-note">{hasTransferFilters ? "没有匹配的历史传输记录。" : "暂无历史传输记录。"}</p>
+                <small>{hasTransferFilters ? "当前条件下没有可回看的传输任务" : "完成后的传输任务会显示在这里"}</small>
+              </div>
+              {#if hasTransferFilters}
+                <div class="empty-panel-actions">
+                  <button class="row-action" type="button" on:click={() => {
+                    transferQuery = "";
+                    transferStatusFilter = "all";
+                  }}>
+                    <RefreshCw size={13} />
+                    清空筛选
+                  </button>
+                </div>
+              {/if}
+            </div>
           {/each}
         </div>
       </section>
+    </div>
+  {:else if section === "notifications"}
+    <header class="workspace-head">
+      <div>
+        <span class="eyebrow">通知</span>
+        <h1>消息提醒</h1>
+        <p>集中处理系统通知、隐私预览和托盘常驻，不再混在会话详情里。</p>
+        {#if statusText}
+          <p class="hint">{statusText}</p>
+        {/if}
+      </div>
+      <div class="workspace-head-actions">
+        <button class="tool-button" type="button" on:click={onEnableNotifications}>
+          <Bell size={15} />
+          {notificationReady ? "重新检查通知" : "开启通知"}
+        </button>
+        <button class="tool-button" type="button" on:click={onMinimizeToTray}>
+          <Minimize2 size={15} />
+          最小化到托盘
+        </button>
+      </div>
+    </header>
+    <div class="settings-grid notification-workspace">
+      <section class="settings-info-card" aria-label="通知状态">
+        <header>
+          <Bell size={16} />
+          <div>
+            <strong>{notificationReady ? "系统通知已开启" : "系统通知未开启"}</strong>
+            <span>{notificationReady ? "收到新消息时会按隐私设置展示桌面提醒。" : "开启后可收到内网消息、群聊和文件传输提醒。"}</span>
+          </div>
+        </header>
+        <dl>
+          <div>
+            <dt>预览内容</dt>
+            <dd>{privacyMode ? "隐私模式隐藏" : showNotificationPreview ? "显示消息摘要" : "隐藏消息摘要"}</dd>
+          </div>
+          <div>
+            <dt>隐私模式</dt>
+            <dd>{privacyMode ? "已开启" : "未开启"}</dd>
+          </div>
+          <div>
+            <dt>未读会话</dt>
+            <dd>{outboxMessages.length + todoMessages.length > 0 ? "有待处理项目" : "暂无待处理提醒"}</dd>
+          </div>
+          <div>
+            <dt>托盘</dt>
+            <dd>{trayStatus || (closeToTray ? "关闭隐藏到托盘" : "关闭窗口")}</dd>
+          </div>
+        </dl>
+      </section>
+      <div class="notification-action-grid">
+        <button class:enabled={showNotificationPreview && !privacyMode} class="switch-row" type="button" on:click={onToggleNotificationPreview}>
+          <Bell size={16} />
+          <span>通知预览</span>
+          <strong>{privacyMode ? "隐私模式接管" : showNotificationPreview ? "显示" : "隐藏"}</strong>
+        </button>
+        <button class:enabled={privacyMode} class="switch-row" type="button" on:click={onTogglePrivacyMode}>
+          <ShieldCheck size={16} />
+          <span>隐私模式</span>
+          <strong>{privacyMode ? "开启" : "关闭"}</strong>
+        </button>
+        <button class:enabled={closeToTray} class="switch-row" type="button" on:click={onToggleCloseToTray}>
+          <Minimize2 size={16} />
+          <span>关闭按钮</span>
+          <strong>{closeToTray ? "隐藏到托盘" : "关闭窗口"}</strong>
+        </button>
+      </div>
     </div>
   {:else}
     <header class="workspace-head">
       <div>
         <span class="eyebrow">设置</span>
         <h1>工作台配置</h1>
-        <p>集中管理个人资料、网络发现、存储、安全信任、通知与外观。</p>
+        <p>集中管理个人资料、网络状态、存储、安全信任、通知与外观。</p>
       </div>
     </header>
 
@@ -1147,7 +1327,7 @@
 
       <div class="settings-section">
         {#if settingsTab === "profile"}
-          <section class="settings-info-card" aria-label="设备身份">
+          <section class="settings-info-card settings-profile-card" aria-label="设备身份">
             <header>
               <Users size={16} />
               <div>
@@ -1155,7 +1335,7 @@
                 <span>用于局域网发现、会话签名和 TOFU 信任。</span>
               </div>
             </header>
-            <dl>
+            <dl class="profile-identity-grid">
               <div>
                 <dt>设备 ID</dt>
                 <dd class="identity-value-row" title={selfDeviceId}>
@@ -1180,42 +1360,46 @@
               </div>
             </dl>
           </section>
-          <label class="field">
-            <span>显示名称</span>
-            <input value={profileName} placeholder={self?.display_name ?? "本机用户"} on:input={(event) => onProfileNameChange((event.currentTarget as HTMLInputElement).value)} />
-          </label>
-          <label class="field">
-            <span>主机备注</span>
-            <input value={profileHostname} placeholder={self?.hostname ?? "windows-pc"} on:input={(event) => onProfileHostnameChange((event.currentTarget as HTMLInputElement).value)} />
-          </label>
-          <div class="field">
-            <span>在线状态</span>
-            <div class="presence-choice-grid" role="group" aria-label="本机在线状态">
-              {#each profileStatusChoices as choice (choice.value)}
-                <button
-                  class:active={profileStatus === choice.value}
-                  class="status-choice"
-                  type="button"
-                  aria-pressed={profileStatus === choice.value}
-                  on:click={() => onProfileStatusChange(choice.value)}
-                >
-                  <span class={`presence-dot ${choice.tone}`}></span>
-                  {choice.label}
-                </button>
-              {/each}
+          <div class="settings-form-grid">
+            <label class="field">
+              <span>显示名称</span>
+              <input value={profileName} placeholder={self?.display_name ?? "本机用户"} on:input={(event) => onProfileNameChange((event.currentTarget as HTMLInputElement).value)} />
+            </label>
+            <label class="field">
+              <span>主机备注</span>
+              <input value={profileHostname} placeholder={self?.hostname ?? "windows-pc"} on:input={(event) => onProfileHostnameChange((event.currentTarget as HTMLInputElement).value)} />
+            </label>
+            <div class="field full-span">
+              <span>在线状态</span>
+              <div class="presence-choice-grid" role="group" aria-label="本机在线状态">
+                {#each profileStatusChoices as choice (choice.value)}
+                  <button
+                    class:active={profileStatus === choice.value}
+                    class="status-choice"
+                    type="button"
+                    aria-pressed={profileStatus === choice.value}
+                    on:click={() => onProfileStatusChange(choice.value)}
+                  >
+                    <span class={`presence-dot ${choice.tone}`}></span>
+                    {choice.label}
+                  </button>
+                {/each}
+              </div>
             </div>
           </div>
-          <button class="wide-button" type="button" on:click={onSaveProfile}>
-            <Save size={15} />
-            保存本机资料
-          </button>
+          <div class="settings-action-bar">
+            <button class="primary-action settings-primary-action" type="button" on:click={onSaveProfile}>
+              <Save size={15} />
+              保存本机资料
+            </button>
+          </div>
         {:else if settingsTab === "network"}
-          <section class="settings-info-card" aria-label="网络发现参数">
+          <section class="settings-info-card" aria-label="网络状态">
             <header>
               <Network size={16} />
               <div>
-                <strong>发现与直连</strong>
-                <span>默认同网段自动发现，复杂网络可配置种子与扫描网段。</span>
+                <strong>默认内网直连</strong>
+                <span>网络发现使用内置默认配置自动运行；联系人页就是设备发现与管理入口。</span>
               </div>
             </header>
             <dl>
@@ -1226,14 +1410,6 @@
               <div>
                 <dt>直连端口</dt>
                 <dd>{transportConfig.listen_port}/QUIC</dd>
-              </div>
-              <div>
-                <dt>种子数量</dt>
-                <dd>{settings.seed_peers.length}</dd>
-              </div>
-              <div>
-                <dt>扫描网段</dt>
-                <dd>{settings.scan_ranges.length}</dd>
               </div>
               <div>
                 <dt>发现间隔</dt>
@@ -1260,7 +1436,7 @@
           <section class="network-health-grid" aria-label="发现健康摘要">
             <div>
               <Network size={16} />
-              <span>发现设备</span>
+              <span>联系人</span>
               <strong>{discoveredPeerCount}</strong>
             </div>
             <div>
@@ -1270,18 +1446,13 @@
             </div>
             <div class:enabled={settings.auto_discovery}>
               <CheckSquare size={16} />
-              <span>自动发现</span>
-              <strong>{settings.auto_discovery ? "开启" : "关闭"}</strong>
+              <span>发现服务</span>
+              <strong>默认</strong>
             </div>
             <div class:enabled={settings.multicast}>
               <Network size={16} />
-              <span>广播</span>
-              <strong>{settings.multicast ? "开启" : "关闭"}</strong>
-            </div>
-            <div>
-              <HardDrive size={16} />
-              <span>高级配置</span>
-              <strong>{advancedDiscoveryCount}</strong>
+              <span>连接方式</span>
+              <strong>内网直连</strong>
             </div>
           </section>
           <section class="network-diagnostics" aria-label="网络诊断建议">
@@ -1289,9 +1460,12 @@
               <ShieldCheck size={16} />
               <div>
                 <strong>网络诊断</strong>
-                <span>根据当前发现配置、可联系设备和最近警告生成排查建议。</span>
+                <span>根据联系人可达状态和最近警告生成排查建议。</span>
               </div>
-              <button type="button" on:click={() => onCopyNetworkDiagnostics(networkDiagnosticReport())}>复制诊断报告</button>
+              <button class="section-compact-action" type="button" on:click={() => onCopyNetworkDiagnostics(networkDiagnosticReport())}>
+                <Copy size={12} />
+                复制诊断报告
+              </button>
             </header>
             <div class="diagnostic-list">
               {#each networkDiagnostics as item}
@@ -1315,53 +1489,6 @@
           <p class="warning">
             首次启动如出现 Windows 防火墙提示，请允许专用网络访问；局域网发现、QUIC 直连和文件传输分别使用 24250/UDP、24251/QUIC、24252/TCP。
           </p>
-          <button class:enabled={settings.auto_discovery} class="switch-row" type="button" on:click={onToggleAutoDiscovery}>
-            <Network size={16} />
-            <span>自动发现</span>
-            <strong>{settings.auto_discovery ? "开启" : "关闭"}</strong>
-          </button>
-          <button class:enabled={settings.multicast} class="switch-row" type="button" on:click={onToggleMulticast}>
-            <Network size={16} />
-            <span>局域网广播</span>
-            <strong>{settings.multicast ? "开启" : "关闭"}</strong>
-          </button>
-          <label class="field">
-            <span>种子节点</span>
-            <input value={seedText} placeholder="192.168.1.20:24251，多个用空格分隔" on:input={(event) => onSeedTextChange((event.currentTarget as HTMLInputElement).value)} />
-          </label>
-          <label class="field">
-            <span>扫描网段</span>
-            <input value={rangeText} placeholder="192.168.1.0/24，多个用空格分隔" on:input={(event) => onRangeTextChange((event.currentTarget as HTMLInputElement).value)} />
-          </label>
-          <p class="hint">有效目标仅限 RFC1918 私网地址（10/8、172.16/12、192.168/16）；单个扫描网段最多 1024 个主机。</p>
-          <div class="network-tuning-grid">
-            <label class="field">
-              <span>发现间隔（秒）</span>
-              <input
-                type="number"
-                min="1"
-                max="60"
-                step="1"
-                value={discoveryIntervalText}
-                on:input={(event) => onDiscoveryIntervalTextChange((event.currentTarget as HTMLInputElement).value)}
-              />
-            </label>
-            <label class="field">
-              <span>离线判定（秒）</span>
-              <input
-                type="number"
-                min="5"
-                max="600"
-                step="1"
-                value={peerTtlText}
-                on:input={(event) => onPeerTtlTextChange((event.currentTarget as HTMLInputElement).value)}
-              />
-            </label>
-          </div>
-          <button class="wide-button" type="button" on:click={onSaveNetwork}>
-            <Save size={15} />
-            保存网络发现设置
-          </button>
           {#if networkInputWarning}
             <p class="warning">{networkInputWarning}</p>
           {/if}
@@ -1425,6 +1552,7 @@
                       title={`复制${row.copyLabel}`}
                       on:click={() => onCopyStoragePath(row.value, row.copyLabel)}
                     >
+                      <Copy size={12} />
                       复制
                     </button>
                   {/if}
@@ -1432,32 +1560,91 @@
               </div>
             {/each}
           </dl>
-          <div class="button-row">
-            <button class="wide-button muted" type="button" on:click={onRefreshStorage}>
-              <RefreshCw size={15} />
-              刷新存储信息
-            </button>
-            <button class="wide-button muted" type="button" on:click={() => onCopyStorageDiagnostics(storageDiagnosticReport())}>
-              <Copy size={15} />
-              复制存储诊断报告
-            </button>
-            <button class="wide-button muted" type="button" on:click={() => onOpenStorage("data")}>
-              <HardDrive size={15} />
-              打开数据目录
-            </button>
-            <button class="wide-button muted" type="button" on:click={() => onOpenStorage("received")}>
-              <UploadCloud size={15} />
-              打开接收目录
-            </button>
-            <button class="wide-button muted" type="button" on:click={() => onOpenStorage("staged")}>
-              <HardDrive size={15} />
-              打开暂存目录
-            </button>
-            <button class="wide-button danger" type="button" on:click={onClearStagedFiles}>
+          <section class="settings-action-panel settings-command-panel" aria-label="存储维护">
+            <header>
+              <strong>存储维护</strong>
+              <span>刷新状态、迁移目录或复制诊断信息。</span>
+            </header>
+            <div class="settings-action-grid">
+              <button class="action-card" type="button" aria-label="刷新存储信息" on:click={onRefreshStorage}>
+                <RefreshCw size={16} />
+                <span>
+                  <strong>刷新存储信息</strong>
+                  <small>重新读取数据库、缓存和目录占用</small>
+                </span>
+              </button>
+              <button class="action-card primary-card" type="button" aria-label={storageMigrationActive ? "正在迁移数据目录" : "迁移数据目录"} disabled={storageMigrationActive} on:click={onMigrateStorageDirectory}>
+                <HardDrive size={16} />
+                <span>
+                  <strong>{storageMigrationActive ? "正在迁移数据目录" : "迁移数据目录"}</strong>
+                  <small>选择新的本地数据保存位置</small>
+                </span>
+              </button>
+              <button class="action-card" type="button" aria-label="复制存储诊断报告" on:click={() => onCopyStorageDiagnostics(storageDiagnosticReport())}>
+                <Copy size={16} />
+                <span>
+                  <strong>复制存储诊断报告</strong>
+                  <small>用于排查加密库和文件缓存</small>
+                </span>
+              </button>
+            </div>
+          </section>
+          <section class="settings-action-panel settings-directory-panel" aria-label="打开存储目录">
+            <header>
+              <strong>目录入口</strong>
+              <span>直接打开常用存储位置。</span>
+            </header>
+            <div class="settings-action-grid three-column">
+              <button class="action-card" type="button" aria-label="打开数据目录" on:click={() => onOpenStorage("data")}>
+                <HardDrive size={16} />
+                <span>
+                  <strong>打开数据目录</strong>
+                  <small>配置、数据库与密钥</small>
+                </span>
+              </button>
+              <button class="action-card" type="button" aria-label="打开接收目录" on:click={() => onOpenStorage("received")}>
+                <UploadCloud size={16} />
+                <span>
+                  <strong>打开接收目录</strong>
+                  <small>已接收文件</small>
+                </span>
+              </button>
+              <button class="action-card" type="button" aria-label="打开暂存目录" on:click={() => onOpenStorage("staged")}>
+                <HardDrive size={16} />
+                <span>
+                  <strong>打开暂存目录</strong>
+                  <small>剪贴板与待发送缓存</small>
+                </span>
+              </button>
+            </div>
+          </section>
+          <section class="settings-danger-zone" aria-label="危险操作">
+            <div>
+              <strong>危险操作</strong>
+              <span>仅清理剪贴板暂存，不会删除聊天记录或已接收文件。</span>
+            </div>
+            <button class="danger-action" type="button" on:click={onClearStagedFiles}>
               <Trash2 size={15} />
               清理剪贴板暂存
             </button>
-          </div>
+          </section>
+          {#if storageMigrationProgress}
+            <section class="migration-progress-card" aria-label="数据目录迁移进度">
+              <div>
+                <strong>{storageMigrationProgress.phase === "done" ? "迁移完成" : "正在迁移"}</strong>
+                <span>{storageMigrationProgress.current_path}</span>
+              </div>
+              <progress
+                max={Math.max(storageMigrationProgress.total, 1)}
+                value={Math.min(storageMigrationProgress.completed, Math.max(storageMigrationProgress.total, 1))}
+              ></progress>
+              <small>
+                {storageMigrationProgress.total > 0
+                  ? `${storageMigrationProgress.completed}/${storageMigrationProgress.total}`
+                  : "准备迁移文件"}
+              </small>
+            </section>
+          {/if}
         {:else if settingsTab === "security"}
           <section class="settings-info-card" aria-label="信任概览">
             <header>
@@ -1466,7 +1653,10 @@
                 <strong>信任概览</strong>
                 <span>首次信任后会拒绝同一设备 ID 的指纹替换。</span>
               </div>
-              <button type="button" on:click={() => onCopyIdentityValue(securityDiagnosticReport(), "安全诊断报告")}>复制诊断报告</button>
+              <button class="section-compact-action" type="button" on:click={() => onCopyIdentityValue(securityDiagnosticReport(), "安全诊断报告")}>
+                <Copy size={12} />
+                复制诊断报告
+              </button>
             </header>
             <dl>
               <div>
@@ -1491,7 +1681,10 @@
                   <strong>{peer.display_name}</strong>
                   <small>{peer.fingerprint}</small>
                 </div>
-                <button type="button" on:click={() => onTrustPeer(peer)}>信任</button>
+                <button class="section-compact-action" type="button" on:click={() => onTrustPeer(peer)}>
+                  <ShieldCheck size={12} />
+                  信任
+                </button>
               </article>
             {/each}
           </div>
@@ -1520,20 +1713,27 @@
                   </div>
                   <div class="trusted-device-actions">
                     <button
+                      class="trusted-action"
                       type="button"
                       aria-label={`复制 ${trustedPeerLabel(record)} 指纹`}
                       on:click={() => onCopyTrustedFingerprint(record.fingerprint, `${trustedPeerLabel(record)} 指纹`)}
                     >
+                      <Copy size={12} />
                       复制指纹
                     </button>
                     <button
+                      class="trusted-action"
                       type="button"
                       aria-label={`复制 ${trustedPeerLabel(record)} 信任记录`}
                       on:click={() => onCopyIdentityValue(trustedPeerAuditReport(record), `${trustedPeerLabel(record)} 信任记录`)}
                     >
+                      <Copy size={12} />
                       复制记录
                     </button>
-                    <button class="danger-text" type="button" on:click={() => onRemoveTrustedPeer(record.peer_id)}>移除信任</button>
+                    <button class="trusted-action danger" type="button" on:click={() => onRemoveTrustedPeer(record.peer_id)}>
+                      <Trash2 size={12} />
+                      移除信任
+                    </button>
                   </div>
                 </article>
               {:else}
@@ -1582,34 +1782,71 @@
               </div>
             </dl>
           </section>
-          <button class="wide-button muted" type="button" on:click={onEnableNotifications}>
-            <Bell size={15} />
-            {notificationReady ? "系统通知已开启" : "开启系统通知"}
-          </button>
-          <button class="wide-button muted" type="button" on:click={onMinimizeToTray}>
-            <Minimize2 size={15} />
-            最小化到托盘
-          </button>
-          <button class="wide-button muted" type="button" on:click={onToggleCloseToTray}>
-            <Minimize2 size={15} />
-            {closeToTray ? "关闭按钮改为关闭窗口" : "关闭按钮隐藏到托盘"}
-          </button>
-          <button class="wide-button muted" type="button" on:click={onToggleTheme}>
-            <Palette size={15} />
-            {dark ? "切换浅色主题" : "切换深色主题"}
-          </button>
-          <button class="wide-button muted" type="button" on:click={onToggleSendShortcut}>
-            <Keyboard size={15} />
-            {sendShortcut === "enter" ? "切换 Ctrl+Enter 发送" : "切换 Enter 发送"}
-          </button>
-          <button class:enabled={privacyMode} class="wide-button muted" type="button" on:click={onTogglePrivacyMode}>
-            <ShieldCheck size={15} />
-            {privacyMode ? "关闭隐私模式" : "开启隐私模式"}
-          </button>
-          <button class="wide-button muted" type="button" on:click={onToggleNotificationPreview}>
-            <Bell size={15} />
-            {privacyMode ? "隐私模式已隐藏通知内容" : showNotificationPreview ? "隐藏通知消息内容" : "显示通知消息内容"}
-          </button>
+          <section class="settings-action-panel settings-command-panel" aria-label="系统动作">
+            <header>
+              <strong>系统动作</strong>
+              <span>通知授权和托盘行为通常只需要偶尔操作。</span>
+            </header>
+            <div class="settings-action-grid">
+              <button class="action-card" type="button" aria-label={notificationReady ? "系统通知已开启" : "开启系统通知"} on:click={onEnableNotifications}>
+                <Bell size={16} />
+                <span>
+                  <strong>{notificationReady ? "系统通知已开启" : "开启系统通知"}</strong>
+                  <small>{notificationReady ? "重新检查桌面通知权限" : "允许收到新消息和文件提醒"}</small>
+                </span>
+              </button>
+              <button class="action-card" type="button" aria-label="最小化到托盘" on:click={onMinimizeToTray}>
+                <Minimize2 size={16} />
+                <span>
+                  <strong>最小化到托盘</strong>
+                  <small>保持后台收发和系统通知</small>
+                </span>
+              </button>
+            </div>
+          </section>
+          <section class="settings-action-panel settings-preference-panel" aria-label="偏好开关">
+            <header>
+              <strong>偏好开关</strong>
+              <span>常用开关用状态卡呈现，当前值一眼可见。</span>
+            </header>
+            <div class="preference-toggle-grid">
+              <button class:enabled={closeToTray} class="preference-toggle" type="button" aria-label={closeToTray ? "关闭按钮改为关闭窗口" : "关闭按钮隐藏到托盘"} on:click={onToggleCloseToTray}>
+                <Minimize2 size={16} />
+                <span>
+                  <strong>关闭按钮</strong>
+                  <small>{closeToTray ? "隐藏到托盘" : "关闭窗口"}</small>
+                </span>
+              </button>
+              <button class:enabled={dark} class="preference-toggle" type="button" aria-label={dark ? "切换浅色主题" : "切换深色主题"} on:click={onToggleTheme}>
+                <Palette size={16} />
+                <span>
+                  <strong>主题</strong>
+                  <small>{dark ? "深色" : "浅色"}</small>
+                </span>
+              </button>
+              <button class:enabled={sendShortcut === "ctrl_enter"} class="preference-toggle" type="button" aria-label={sendShortcut === "enter" ? "切换 Ctrl+Enter 发送" : "切换 Enter 发送"} on:click={onToggleSendShortcut}>
+                <Keyboard size={16} />
+                <span>
+                  <strong>发送键</strong>
+                  <small>{sendShortcut === "enter" ? "Enter" : "Ctrl+Enter"}</small>
+                </span>
+              </button>
+              <button class:enabled={privacyMode} class="preference-toggle" type="button" aria-label={privacyMode ? "关闭隐私模式" : "开启隐私模式"} on:click={onTogglePrivacyMode}>
+                <ShieldCheck size={16} />
+                <span>
+                  <strong>隐私保护</strong>
+                  <small>{privacyMode ? "保护中" : "未保护"}</small>
+                </span>
+              </button>
+              <button class:enabled={showNotificationPreview && !privacyMode} class="preference-toggle" type="button" aria-label={privacyMode ? "隐私模式已隐藏通知内容" : showNotificationPreview ? "隐藏通知消息内容" : "显示通知消息内容"} on:click={onToggleNotificationPreview}>
+                <Bell size={16} />
+                <span>
+                  <strong>通知预览</strong>
+                  <small>{privacyMode ? "隐私模式接管" : showNotificationPreview ? "显示内容" : "隐藏内容"}</small>
+                </span>
+              </button>
+            </div>
+          </section>
           {#if trayStatus}
             <p class="hint">{trayStatus}</p>
           {/if}

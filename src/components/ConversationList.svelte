@@ -1,7 +1,7 @@
 ﻿<script lang="ts">
   import Archive from "lucide-svelte/icons/archive";
   import BellOff from "lucide-svelte/icons/bell-off";
-  import Edit3 from "lucide-svelte/icons/edit-3";
+  import CheckCheck from "lucide-svelte/icons/check-check";
   import MessageSquare from "lucide-svelte/icons/message-square";
   import Pin from "lucide-svelte/icons/pin";
   import PinOff from "lucide-svelte/icons/pin-off";
@@ -11,14 +11,13 @@
   import UserRound from "lucide-svelte/icons/user-round";
   import Volume2 from "lucide-svelte/icons/volume-2";
   import type { ContactMetadata, ConversationSummary, PeerProfile } from "../api";
-  import { directConversationPeer, filterConversationSummaries, visibleUnreadCount, type ConversationFilter } from "../conversationState";
+  import { directConversationPeer, visibleUnreadCount } from "../conversationState";
 
   export let self: PeerProfile | null = null;
   export let peers: PeerProfile[] = [];
   export let contactMetadata: Record<string, ContactMetadata> = {};
   export let conversations: ConversationSummary[] = [];
   export let activeConversation = "";
-  export let filter: ConversationFilter = "active";
   export let query = "";
   export let focusSearchToken = 0;
   export let mentionedConversationIds: string[] = [];
@@ -28,10 +27,8 @@
   export let typingPreviewByConversation: Record<string, string> = {};
   export let privacyMode = false;
   export let onQueryChange: (value: string) => void = () => {};
-  export let onFilterChange: (value: ConversationFilter) => void = () => {};
   export let onSearch: () => void | Promise<void> = () => {};
   export let onSelectConversation: (id: string) => void | Promise<void> = () => {};
-  export let onOpenContacts: () => void = () => {};
   export let onRefreshPeers: () => void | Promise<void> = () => {};
   export let onTogglePin: (id: string) => void | Promise<void> = () => {};
   export let onToggleMute: (id: string) => void | Promise<void> = () => {};
@@ -50,18 +47,6 @@
   let searchInput: HTMLInputElement | null = null;
   let handledFocusSearchToken = 0;
 
-  const filters: Array<{ id: ConversationFilter; label: string }> = [
-    { id: "active", label: "当前" },
-    { id: "all", label: "全部" },
-    { id: "unread", label: "未读" },
-    { id: "mentions", label: "@我" },
-    { id: "todo", label: "待办" },
-    { id: "outbox", label: "待发" },
-    { id: "pinned", label: "置顶" },
-    { id: "muted", label: "免扰" },
-    { id: "archived", label: "归档" }
-  ];
-
   $: contactFilterItems = [
     { id: "all", label: "全部", count: contactPeers.length },
     { id: "online", label: "可联系", count: reachablePeerCount },
@@ -70,22 +55,12 @@
   ] satisfies Array<{ id: ContactDirectoryFilter; label: string; count: number }>;
 
   $: normalizedQuery = query.trim().toLowerCase();
-  $: filteredConversations = filterConversationSummaries(
-    conversations,
-    filter,
-    mentionedConversationIds,
-    todoConversationCounts,
-    outboxConversationCounts
-  );
-  $: visibleConversations = normalizedQuery
+  $: filteredConversations = conversations.filter((conversation) => !conversation.archived);
+  $: visibleConversations = (normalizedQuery
     ? filteredConversations.filter((conversation) => conversationSearchText(conversation).includes(normalizedQuery))
-    : filteredConversations;
+    : filteredConversations
+  ).sort(conversationPrioritySort);
   $: unreadCount = visibleUnreadCount(conversations);
-  $: mentionedCount = conversations.filter((conversation) => !conversation.archived && mentionedConversationIds.includes(conversation.id)).length;
-  $: todoCount = conversations.filter((conversation) => !conversation.archived && (todoConversationCounts[conversation.id] ?? 0) > 0).length;
-  $: outboxCount = conversations.filter((conversation) => !conversation.archived && (outboxConversationCounts[conversation.id] ?? 0) > 0).length;
-  $: mutedCount = conversations.filter((conversation) => conversation.muted && !conversation.archived).length;
-  $: archivedCount = conversations.filter((conversation) => conversation.archived).length;
   $: contactPeers = peers.filter((peer) => peer.peer_id !== self?.peer_id && !metadataFor(peer.peer_id).blocked);
   $: visibleContactPeers = contactPeers
     .filter((peer) => contactMatchesFilter(peer, contactFilter))
@@ -212,6 +187,15 @@
     return [...groups.entries()].map(([label, items]) => ({ label, peers: items }));
   }
 
+  function conversationPrioritySort(left: ConversationSummary, right: ConversationSummary) {
+    const rank = (conversation: ConversationSummary) =>
+      (conversation.pinned ? 1_000_000 : 0) +
+      ((todoConversationCounts[conversation.id] ?? 0) > 0 ? 100_000 : 0) +
+      ((outboxConversationCounts[conversation.id] ?? 0) > 0 ? 10_000 : 0) +
+      (mentionedConversationIds.includes(conversation.id) ? 1_000 : 0);
+    return rank(right) - rank(left) || right.last_message_at - left.last_message_at;
+  }
+
   function openContactMode() {
     columnMode = "contacts";
   }
@@ -251,14 +235,14 @@
     />
   </label>
 
-  <div class="column-actions">
-    <button class="secondary-action" type="button" on:click={openContactMode} title="选择联系人开始聊天">
-      <Edit3 size={15} />
-      新会话
-    </button>
-    <button class="secondary-action" type="button" on:click={onRefreshPeers} title="刷新局域网发现">
-      <RefreshCw size={15} />
-      刷新
+  <div class="conversation-sidebar-toolbar" aria-label="侧栏快捷操作">
+    <div>
+      <strong>{columnMode === "contacts" ? "联系人发现" : "消息工作台"}</strong>
+      <small>{reachablePeerCount} 可联系 · {unreadCount} 未读</small>
+    </div>
+    <button class="sidebar-refresh-button" type="button" on:click={onRefreshPeers} title="刷新联系人" aria-label="刷新联系人">
+      <RefreshCw size={14} />
+      <span>刷新</span>
     </button>
   </div>
 
@@ -288,32 +272,15 @@
 
   {#if columnMode === "conversations"}
   <div class="column-page conversation-page">
-  <div class="conversation-filter" role="tablist" aria-label="会话筛选">
-    {#each filters as item}
-      <button
-        class:active={filter === item.id}
-        type="button"
-        role="tab"
-        aria-selected={filter === item.id}
-        on:click={() => onFilterChange(item.id)}
-      >
-        {item.label}
-        {#if item.id === "unread" && unreadCount > 0}<small>{unreadCount}</small>{/if}
-        {#if item.id === "mentions" && mentionedCount > 0}<small>{mentionedCount}</small>{/if}
-        {#if item.id === "todo" && todoCount > 0}<small>{todoCount}</small>{/if}
-        {#if item.id === "outbox" && outboxCount > 0}<small>{outboxCount}</small>{/if}
-        {#if item.id === "muted" && mutedCount > 0}<small>{mutedCount}</small>{/if}
-        {#if item.id === "archived" && archivedCount > 0}<small>{archivedCount}</small>{/if}
-      </button>
-    {/each}
-  </div>
-
   <div class="section-heading">
-    <span>{filters.find((item) => item.id === filter)?.label ?? "会话"}</span>
+    <span>会话</span>
     <span class="section-heading-actions">
       <small>{visibleConversations.length}</small>
       {#if unreadCount > 0}
-        <button type="button" title="全部标为已读" on:click={onMarkAllRead}>全部已读</button>
+        <button class="section-compact-action" type="button" title="全部标为已读" on:click={onMarkAllRead}>
+          <CheckCheck size={12} />
+          全部已读
+        </button>
       {/if}
     </span>
   </div>
@@ -385,17 +352,38 @@
             </span>
           {/if}
         </span>
-        <span class="conversation-actions" aria-hidden="true">
-          <button tabindex="-1" type="button" title={conversation.pinned ? "取消置顶" : "置顶"} on:click={() => onTogglePin(conversation.id)}>
+        <span class="conversation-actions">
+          <button
+            type="button"
+            title={conversation.pinned ? "取消置顶" : "置顶"}
+            aria-label={conversation.pinned ? "取消置顶" : "置顶"}
+            on:click={() => onTogglePin(conversation.id)}
+          >
             {#if conversation.pinned}<PinOff size={13} />{:else}<Pin size={13} />{/if}
           </button>
-          <button tabindex="-1" type="button" title={conversation.muted ? "取消免打扰" : "免打扰"} on:click={() => onToggleMute(conversation.id)}>
+          <button
+            type="button"
+            title={conversation.muted ? "取消免打扰" : "免打扰"}
+            aria-label={conversation.muted ? "取消免打扰" : "免打扰"}
+            on:click={() => onToggleMute(conversation.id)}
+          >
             {#if conversation.muted}<Volume2 size={13} />{:else}<BellOff size={13} />{/if}
           </button>
-          <button tabindex="-1" type="button" title={conversation.archived ? "取消归档" : "归档"} on:click={() => onToggleArchive(conversation.id)}>
+          <button
+            type="button"
+            title={conversation.archived ? "取消归档" : "归档"}
+            aria-label={conversation.archived ? "取消归档" : "归档"}
+            on:click={() => onToggleArchive(conversation.id)}
+          >
             <Archive size={13} />
           </button>
-          <button tabindex="-1" type="button" title="删除会话" on:click={() => onDeleteConversation(conversation.id)}>
+          <button
+            class="danger"
+            type="button"
+            title="删除会话"
+            aria-label="删除会话"
+            on:click={() => onDeleteConversation(conversation.id)}
+          >
             <Trash2 size={13} />
           </button>
         </span>
@@ -404,22 +392,8 @@
       <p class="empty-note">
         {#if normalizedQuery}
           没有匹配的会话。按 Enter 可继续搜索本地聊天记录。
-        {:else if filter === "unread"}
-          暂无未读会话。
-        {:else if filter === "pinned"}
-          暂无置顶会话。
-        {:else if filter === "todo"}
-          暂无待办会话。
-        {:else if filter === "outbox"}
-          暂无待发送会话。
-        {:else if filter === "muted"}
-          暂无免扰会话。
-        {:else if filter === "archived"}
-          暂无归档会话。
-        {:else if filter === "active"}
-          暂无当前会话。归档会话可在“全部”或“归档”中查看。
         {:else}
-          暂无会话。点击“新会话”从联系人开始聊天。
+          暂无会话。到联系人页选择联系人即可开始聊天。
         {/if}
       </p>
     {/each}
@@ -427,33 +401,12 @@
   </div>
   {:else}
   <div class="column-page contacts-page">
-    <section class="contact-quick-summary" aria-label="联系人概览">
-      <div class="contact-drawer-toggle contact-summary-head">
-        <span>
-          <strong>局域网联系人 {contactPeers.length} 人</strong>
-          <small>可联系 {reachablePeerCount} · 暂不可达 {unavailablePeerCount} · 分组 {contactGroupCount}</small>
-        </span>
+    <div class="sidebar-command-bar">
+      <div>
+        <strong>联系人发现</strong>
+        <small>{reachablePeerCount} 可联系 · {unavailablePeerCount} 暂不可达 · {contactGroupCount || 1} 组</small>
       </div>
-      <div class="contact-summary-metrics">
-        <div aria-label={`局域网联系人 ${contactPeers.length} 人`}>
-          <strong>{contactPeers.length}</strong>
-          <span>联系人</span>
-        </div>
-        <div aria-label={`可联系联系人 ${reachablePeerCount} 人`}>
-          <strong>{reachablePeerCount}</strong>
-          <span>可联系</span>
-        </div>
-        <div aria-label={`暂不可达联系人 ${unavailablePeerCount} 人`}>
-          <strong>{unavailablePeerCount}</strong>
-          <span>暂不可达</span>
-        </div>
-        <div aria-label={`联系人分组 ${contactGroupCount} 个`}>
-          <strong>{contactGroupCount}</strong>
-          <span>分组</span>
-        </div>
-      </div>
-      <button class="manage-contact-button" type="button" on:click={onOpenContacts}>管理联系人</button>
-    </section>
+    </div>
 
     <div class="contact-filter-tabs sidebar-contact-filter" role="tablist" aria-label="联系人筛选">
       {#each contactFilterItems as item}
@@ -471,7 +424,7 @@
     </div>
 
     <div class="section-heading peer-heading">
-      <span>局域网设备</span>
+      <span>联系人</span>
       <small>显示 {visibleContactPeers.length}/{contactPeers.length}</small>
     </div>
 
@@ -523,9 +476,8 @@
         <div class="empty-action-note compact">
           <p class="empty-note compact">
             <UserRound size={14} />
-            {normalizedQuery ? "没有匹配的联系人。" : "暂未发现局域网联系人。"}
+            {normalizedQuery ? "没有匹配的联系人。" : "暂无联系人。"}
           </p>
-          <button type="button" on:click={onOpenContacts}>配置网络发现</button>
         </div>
       {/each}
     </div>

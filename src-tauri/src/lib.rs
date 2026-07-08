@@ -272,8 +272,10 @@ pub fn run() {
             commands::start_screen_capture,
             commands::stage_clipboard_files,
             commands::get_storage_overview,
+            commands::migrate_storage_directory,
             commands::clear_staged_files,
-            commands::open_storage_location
+            commands::open_storage_location,
+            commands::restart_app
         ])
         .on_window_event(desktop::handle_window_event)
         .on_menu_event(|app, event| desktop::handle_menu_action(app, event.id().as_ref()))
