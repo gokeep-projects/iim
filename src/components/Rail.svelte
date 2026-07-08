@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Bell from "lucide-svelte/icons/bell";
   import FolderArchive from "lucide-svelte/icons/folder-archive";
   import MessageSquareText from "lucide-svelte/icons/message-square-text";
   import Moon from "lucide-svelte/icons/moon";
@@ -11,11 +10,11 @@
 
   export let activeSection: Section = "messages";
   export let dark = false;
-  export let notificationReady = false;
   export let unreadCount = 0;
+  export let avatarLabel = "灵";
   export let onSelect: (section: Section) => void = () => {};
-  export let onOpenNotifications: () => void = () => onSelect("notifications");
   export let onToggleTheme: () => void = () => {};
+  export let onOpenProfileMenu: (event: MouseEvent) => void = () => {};
 
   $: unreadLabel = unreadCount > 99 ? "99+" : String(unreadCount);
 
@@ -28,7 +27,9 @@
 </script>
 
 <aside class="rail" role="navigation" aria-label="主导航">
-  <div class="brand" aria-label="灵犀内网通">灵</div>
+  <button class="brand profile-brand-button" type="button" aria-label="打开个人菜单" title="个人状态" on:click={onOpenProfileMenu}>
+    {avatarLabel}
+  </button>
 
   {#each items as item}
     <button
@@ -46,19 +47,6 @@
       {/if}
     </button>
   {/each}
-
-  <button
-    class:active={activeSection === "notifications"}
-    class:ready={notificationReady}
-    class="rail-button"
-    type="button"
-    title="通知"
-    aria-current={activeSection === "notifications" ? "page" : undefined}
-    on:click={onOpenNotifications}
-  >
-    <Bell size={18} />
-    <span>通知</span>
-  </button>
 
   <div class="rail-spacer"></div>
 

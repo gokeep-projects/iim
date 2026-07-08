@@ -249,6 +249,37 @@ describe("ChatWorkspace attachments", () => {
     expect(screen.getAllByRole("separator")).toHaveLength(2);
   });
 
+  it("scrolls to the newest message when messages change", async () => {
+    const scrollTo = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 900,
+    });
+    const { rerender } = render(ChatWorkspace, {
+      props: {
+        messages: [textMessage({ id: "first" })],
+      },
+    });
+
+    scrollTo.mockClear();
+    await rerender({
+      messages: [
+        textMessage({ id: "first" }),
+        textMessage({ id: "second", body: "latest update" }),
+      ],
+    });
+
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenCalledWith(
+        expect.objectContaining({ top: 900 }),
+      ),
+    );
+  });
+
   it("shows live transfer status and progress inside attachment cards", async () => {
     render(ChatWorkspace, {
       props: {
@@ -542,6 +573,25 @@ describe("ChatWorkspace attachments", () => {
 });
 
 describe("ChatWorkspace composer toolbar", () => {
+  it("keeps quick replies behind a compact menu instead of rendering every reply inline", async () => {
+    const send = vi.fn();
+    render(ChatWorkspace, {
+      props: {
+        quickReplies: ["收到", "稍后处理", "请发一下文件"],
+        onSend: send,
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: "收到" })).not.toBeInTheDocument();
+    const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
+    await fireEvent.click(within(toolbar).getByRole("button", { name: "快捷回复" }));
+
+    const menu = await screen.findByRole("menu", { name: "快捷回复" });
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "收到" }));
+
+    expect(send).toHaveBeenCalledWith("收到");
+  });
+
   it("shows message selection controls with bulk actions above the chat history", async () => {
     const toggleSelection = vi.fn();
     const toggleSelectAll = vi.fn();
@@ -1402,7 +1452,9 @@ describe("ChatWorkspace send shortcut", () => {
       },
     });
 
-    const quickReply = screen.getByRole("button", { name: "收到" });
+    const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
+    await fireEvent.click(within(toolbar).getByRole("button", { name: "快捷回复" }));
+    const quickReply = within(await screen.findByRole("menu", { name: "快捷回复" })).getByRole("menuitem", { name: "收到" });
     expect(quickReply).toBeDisabled();
     await fireEvent.click(quickReply);
 
@@ -1411,6 +1463,43 @@ describe("ChatWorkspace send shortcut", () => {
 });
 
 describe("ChatWorkspace composer context", () => {
+  it("hides the generic undiscovered-contact warning from the composer status row", () => {
+    render(ChatWorkspace, {
+      props: {
+        fileActionsDisabledReason: "请先选择一个已发现的联系人",
+      },
+    });
+
+    const status = screen.getByLabelText("发送状态");
+    expect(within(status).queryByText("请先选择一个已发现的联系人")).not.toBeInTheDocument();
+  });
+
+  it("shows a selected conversation overview when no messages are loaded", () => {
+    render(ChatWorkspace, {
+      props: {
+        title: "产品经理",
+        conversation: conversation({
+          title: "产品经理",
+          last_message_preview: "可以先发一版无服务器群聊，我来验收。",
+          last_message_at: 1_700_000_080_000,
+          unread_count: 2,
+        }),
+        activePeer: peerProfile({
+          display_name: "产品经理",
+          hostname: "pm-laptop",
+          endpoints: ["192.168.1.42:24251"],
+        }),
+        messages: [],
+      },
+    });
+
+    const overview = screen.getByRole("region", { name: "会话概览" });
+    expect(within(overview).getByText("产品经理")).toBeInTheDocument();
+    expect(within(overview).getByText("可以先发一版无服务器群聊，我来验收。")).toBeInTheDocument();
+    expect(within(overview).getByText("192.168.1.42:24251")).toBeInTheDocument();
+    expect(screen.queryByText("选择会话后开始内网直连聊天")).not.toBeInTheDocument();
+  });
+
   it("shows group scope and delivery blockers near the composer", () => {
     render(ChatWorkspace, {
       props: {

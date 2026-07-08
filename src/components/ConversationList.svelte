@@ -1,15 +1,8 @@
 ﻿<script lang="ts">
-  import Archive from "lucide-svelte/icons/archive";
-  import BellOff from "lucide-svelte/icons/bell-off";
   import CheckCheck from "lucide-svelte/icons/check-check";
   import MessageSquare from "lucide-svelte/icons/message-square";
-  import Pin from "lucide-svelte/icons/pin";
-  import PinOff from "lucide-svelte/icons/pin-off";
   import RefreshCw from "lucide-svelte/icons/refresh-cw";
-  import Search from "lucide-svelte/icons/search";
-  import Trash2 from "lucide-svelte/icons/trash-2";
   import UserRound from "lucide-svelte/icons/user-round";
-  import Volume2 from "lucide-svelte/icons/volume-2";
   import type { ContactMetadata, ConversationSummary, PeerProfile } from "../api";
   import { directConversationPeer, visibleUnreadCount } from "../conversationState";
 
@@ -18,22 +11,14 @@
   export let contactMetadata: Record<string, ContactMetadata> = {};
   export let conversations: ConversationSummary[] = [];
   export let activeConversation = "";
-  export let query = "";
-  export let focusSearchToken = 0;
   export let mentionedConversationIds: string[] = [];
   export let todoConversationCounts: Record<string, number> = {};
   export let outboxConversationCounts: Record<string, number> = {};
   export let failedOutboxConversationCounts: Record<string, number> = {};
   export let typingPreviewByConversation: Record<string, string> = {};
   export let privacyMode = false;
-  export let onQueryChange: (value: string) => void = () => {};
-  export let onSearch: () => void | Promise<void> = () => {};
   export let onSelectConversation: (id: string) => void | Promise<void> = () => {};
   export let onRefreshPeers: () => void | Promise<void> = () => {};
-  export let onTogglePin: (id: string) => void | Promise<void> = () => {};
-  export let onToggleMute: (id: string) => void | Promise<void> = () => {};
-  export let onToggleArchive: (id: string) => void | Promise<void> = () => {};
-  export let onDeleteConversation: (id: string) => void | Promise<void> = () => {};
   export let onMarkAllRead: () => void | Promise<void> = () => {};
   export let onConversationContext: (conversation: ConversationSummary, event: MouseEvent) => void = () => {};
   export let onPeerContext: (peer: PeerProfile, event: MouseEvent) => void = () => {};
@@ -44,27 +29,21 @@
 
   let columnMode: ColumnMode = "conversations";
   let contactFilter: ContactDirectoryFilter = "all";
-  let searchInput: HTMLInputElement | null = null;
-  let handledFocusSearchToken = 0;
+  let refreshing = false;
 
   $: contactFilterItems = [
     { id: "all", label: "全部", count: contactPeers.length },
     { id: "online", label: "可联系", count: reachablePeerCount },
-    { id: "favorite", label: "收藏", count: favoritePeerCount },
-    { id: "unavailable", label: "暂不可达", count: unavailablePeerCount }
+    { id: "favorite", label: "收藏", count: contactPeers.filter((peer) => metadataFor(peer.peer_id).favorite).length },
+    { id: "unavailable", label: "暂不可达", count: contactPeers.filter((peer) => peer.status !== "online").length }
   ] satisfies Array<{ id: ContactDirectoryFilter; label: string; count: number }>;
 
-  $: normalizedQuery = query.trim().toLowerCase();
   $: filteredConversations = conversations.filter((conversation) => !conversation.archived);
-  $: visibleConversations = (normalizedQuery
-    ? filteredConversations.filter((conversation) => conversationSearchText(conversation).includes(normalizedQuery))
-    : filteredConversations
-  ).sort(conversationPrioritySort);
+  $: visibleConversations = filteredConversations.sort(conversationPrioritySort);
   $: unreadCount = visibleUnreadCount(conversations);
   $: contactPeers = peers.filter((peer) => peer.peer_id !== self?.peer_id && !metadataFor(peer.peer_id).blocked);
   $: visibleContactPeers = contactPeers
     .filter((peer) => contactMatchesFilter(peer, contactFilter))
-    .filter((peer) => !normalizedQuery || contactSearchText(peer).includes(normalizedQuery))
     .sort((a, b) => {
       const aMeta = metadataFor(a.peer_id);
       const bMeta = metadataFor(b.peer_id);
@@ -77,15 +56,8 @@
     .slice(0, 40);
   $: visibleContactGroups = groupedContactPeers(visibleContactPeers);
   $: reachablePeerCount = contactPeers.filter((peer) => peer.status === "online").length;
-  $: unavailablePeerCount = contactPeers.filter((peer) => peer.status !== "online").length;
-  $: favoritePeerCount = contactPeers.filter((peer) => metadataFor(peer.peer_id).favorite).length;
   $: contactGroupCount = new Set(contactPeers.map((peer) => metadataFor(peer.peer_id).group_name.trim()).filter(Boolean)).size;
   $: contactTabLabel = `联系人 ${contactPeers.length} 人`;
-  $: if (focusSearchToken > 0 && focusSearchToken !== handledFocusSearchToken) {
-    handledFocusSearchToken = focusSearchToken;
-    searchInput?.focus();
-    searchInput?.select();
-  }
 
   function metadataFor(peerId: string) {
     return contactMetadata[peerId] ?? { peer_id: peerId, remark: "", group_name: "", favorite: false, blocked: false };
@@ -138,7 +110,7 @@
       conversationTitle(conversation),
       conversation.title,
       conversation.id,
-      peer ? `${peer.display_name} ${peer.hostname} ${metadataFor(peer.peer_id).group_name}` : "",
+      peer ? `${peer.display_name} ${peer.hostname} ${peer.endpoints.join(" ")} ${metadataFor(peer.peer_id).group_name}` : "",
       conversation.pinned ? "置顶 pinned" : "",
       conversation.muted ? "免扰 muted" : "",
       conversation.archived ? "归档 archived" : "",
@@ -163,6 +135,7 @@
       peer.display_name,
       peer.hostname,
       peer.peer_id,
+      peer.endpoints.join(" "),
       metadata.group_name,
       metadata.favorite ? "收藏 favorite" : "",
       peer.status === "online" ? "可联系 在线 online" : "暂不可达 离线 offline"
@@ -176,6 +149,20 @@
     if (currentFilter === "favorite") return metadataFor(peer.peer_id).favorite;
     if (currentFilter === "unavailable") return peer.status !== "online";
     return true;
+  }
+
+  function delay(milliseconds: number) {
+    return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+  }
+
+  async function handleRefreshPeers() {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      await Promise.allSettled([Promise.resolve(onRefreshPeers()), delay(1000)]);
+    } finally {
+      refreshing = false;
+    }
   }
 
   function groupedContactPeers(peerList: PeerProfile[]) {
@@ -220,27 +207,21 @@
     </div>
   </header>
 
-  <label class="search-box">
-    <Search size={15} />
-    <input
-      bind:this={searchInput}
-      value={query}
-      placeholder="搜索会话、联系人、聊天记录"
-      on:input={(event) => onQueryChange((event.currentTarget as HTMLInputElement).value)}
-      on:keydown={(event) => {
-        if (event.key === "Enter") {
-          void onSearch();
-        }
-      }}
-    />
-  </label>
-
   <div class="conversation-sidebar-toolbar" aria-label="侧栏快捷操作">
     <div>
       <strong>{columnMode === "contacts" ? "联系人发现" : "消息工作台"}</strong>
       <small>{reachablePeerCount} 可联系 · {unreadCount} 未读</small>
     </div>
-    <button class="sidebar-refresh-button" type="button" on:click={onRefreshPeers} title="刷新联系人" aria-label="刷新联系人">
+    <button
+      class:refreshing
+      class="sidebar-refresh-button"
+      type="button"
+      on:click={handleRefreshPeers}
+      title="刷新联系人"
+      aria-label="刷新联系人"
+      aria-busy={refreshing}
+      disabled={refreshing}
+    >
       <RefreshCw size={14} />
       <span>刷新</span>
     </button>
@@ -352,50 +333,9 @@
             </span>
           {/if}
         </span>
-        <span class="conversation-actions">
-          <button
-            type="button"
-            title={conversation.pinned ? "取消置顶" : "置顶"}
-            aria-label={conversation.pinned ? "取消置顶" : "置顶"}
-            on:click={() => onTogglePin(conversation.id)}
-          >
-            {#if conversation.pinned}<PinOff size={13} />{:else}<Pin size={13} />{/if}
-          </button>
-          <button
-            type="button"
-            title={conversation.muted ? "取消免打扰" : "免打扰"}
-            aria-label={conversation.muted ? "取消免打扰" : "免打扰"}
-            on:click={() => onToggleMute(conversation.id)}
-          >
-            {#if conversation.muted}<Volume2 size={13} />{:else}<BellOff size={13} />{/if}
-          </button>
-          <button
-            type="button"
-            title={conversation.archived ? "取消归档" : "归档"}
-            aria-label={conversation.archived ? "取消归档" : "归档"}
-            on:click={() => onToggleArchive(conversation.id)}
-          >
-            <Archive size={13} />
-          </button>
-          <button
-            class="danger"
-            type="button"
-            title="删除会话"
-            aria-label="删除会话"
-            on:click={() => onDeleteConversation(conversation.id)}
-          >
-            <Trash2 size={13} />
-          </button>
-        </span>
       </article>
     {:else}
-      <p class="empty-note">
-        {#if normalizedQuery}
-          没有匹配的会话。按 Enter 可继续搜索本地聊天记录。
-        {:else}
-          暂无会话。到联系人页选择联系人即可开始聊天。
-        {/if}
-      </p>
+      <p class="empty-note">暂无会话。到联系人页选择联系人即可开始聊天。</p>
     {/each}
   </div>
   </div>
@@ -404,11 +344,11 @@
     <div class="sidebar-command-bar">
       <div>
         <strong>联系人发现</strong>
-        <small>{reachablePeerCount} 可联系 · {unavailablePeerCount} 暂不可达 · {contactGroupCount || 1} 组</small>
+        <small>{contactGroupCount || 1} 个分组 · 支持按用户名、主机名、IP 地址搜索</small>
       </div>
     </div>
 
-    <div class="contact-filter-tabs sidebar-contact-filter" role="tablist" aria-label="联系人筛选">
+    <div class="contact-filter-tabs sidebar-contact-filter visually-hidden-filter" role="tablist" aria-label="联系人筛选">
       {#each contactFilterItems as item}
         <button
           class:active={contactFilter === item.id}
@@ -476,7 +416,7 @@
         <div class="empty-action-note compact">
           <p class="empty-note compact">
             <UserRound size={14} />
-            {normalizedQuery ? "没有匹配的联系人。" : "暂无联系人。"}
+            暂无联系人。
           </p>
         </div>
       {/each}

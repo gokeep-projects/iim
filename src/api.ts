@@ -123,6 +123,11 @@ export interface AppPreferences {
   show_notification_preview: boolean;
   privacy_mode: boolean;
   close_to_tray: boolean;
+  login_enabled: boolean;
+  login_password_hash: string;
+  profile_signature: string;
+  avatar_label: string;
+  require_contact_for_messaging: boolean;
 }
 
 export interface TransferManifest {
@@ -907,6 +912,11 @@ export async function getAppPreferences(): Promise<AppPreferences> {
       show_notification_preview: true,
       privacy_mode: false,
       close_to_tray: true,
+      login_enabled: false,
+      login_password_hash: "",
+      profile_signature: "",
+      avatar_label: "",
+      require_contact_for_messaging: false,
     };
   return invoke("get_app_preferences");
 }

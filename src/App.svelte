@@ -201,6 +201,50 @@
   const messagePageSize = 200;
   const hasTauriRuntime = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
   const contextMenuInset = 8;
+  const previewPeer: PeerProfile = {
+    peer_id: "demo-peer",
+    display_name: "产品经理",
+    hostname: "pm-workstation",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.42:24251"],
+    fingerprint: "d".repeat(64),
+    public_key: Array(32).fill(13)
+  };
+  const previewOpsPeer: PeerProfile = {
+    peer_id: "demo-ops",
+    display_name: "运维中控",
+    hostname: "ops-console",
+    avatar_hash: null,
+    status: "offline",
+    endpoints: ["192.168.1.99:24251"],
+    fingerprint: "e".repeat(64),
+    public_key: Array(32).fill(14)
+  };
+  const previewConversations: ConversationSummary[] = [
+    {
+      id: "direct:demo-peer",
+      title: "产品经理",
+      last_message_at: Date.now(),
+      last_message_preview: "欢迎使用灵犀内网通，搜索、文件和群聊入口都在这里。",
+      unread_count: 1,
+      pinned: true,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "direct:demo-ops",
+      title: "运维中控",
+      last_message_at: Date.now() - 90000,
+      last_message_preview: "192.168.1.99 暂不可达，刷新后会自动更新状态。",
+      unread_count: 0,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    }
+  ];
 
   function clampContextMenuPosition(event: MouseEvent, width: number, height: number) {
     return {
@@ -260,6 +304,7 @@
   let self: PeerProfile | null = null;
   let peers: PeerProfile[] = [];
   let contactMetadata: Record<string, ContactMetadata> = {};
+  let savedContactPeerIds = new Set<string>();
   let focusedContactPeerId = "";
   let conversations: ConversationSummary[] = [];
   let activeConversation = "";
@@ -281,13 +326,22 @@
   let outboxMessages: ChatMessage[] = [];
   let draft = "";
   let query = "";
-  let focusSearchToken = 0;
   let settings = defaultSettings;
   let dark = false;
   let sendShortcut: AppPreferences["send_shortcut"] = "enter";
   let showNotificationPreview = true;
   let privacyMode = false;
   let closeToTray = true;
+  let loginEnabled = false;
+  let loginPasswordHash = "";
+  let loginPasswordDraft = "";
+  let loginPasswordConfirmDraft = "";
+  let loginUnlockDraft = "";
+  let loginUnlockError = "";
+  let appLocked = false;
+  let profileSignature = "";
+  let avatarLabel = "";
+  let requireContactForMessaging = false;
   let inspectorTab: InspectorTab = "details";
   let inspectorOpen = false;
   let settingsTab: SettingsTab = "profile";
@@ -342,6 +396,9 @@
   let lastTypingSentAt = 0;
   let draftSaveTimer: number | null = null;
   let pendingNotificationConversationId = "";
+  let bootstrapping = true;
+  let bootProgress = 8;
+  let bootLabel = "正在启动直连核心";
 
   $: activeConversationSummary = conversations.find((conversation) => conversation.id === activeConversation) ?? null;
   $: activePeer = activeConversation.startsWith("group:")
@@ -396,7 +453,9 @@
       ? outgoingConversationBlockReason({
           conversationId: activeConversation,
           recipientPeerIds: activeRecipientPeerIds,
-          blockedPeerIds
+          blockedPeerIds,
+          contactPeerIds: savedContactPeerIds,
+          requireContactForMessaging
         })
       : ""
   );
@@ -435,6 +494,10 @@
   $: unavailablePeerCount = peers.length - reachablePeerCount;
   $: pendingOutboxCount = outboxMessages.filter((message) => message.status === "queued" || message.status === "failed").length;
   $: welcomeSignalText = networkWarning || (reachablePeerCount > 0 ? "局域网直连通道可用" : "正在等待同网段设备");
+  $: displaySelfName = profileName.trim() || self?.display_name || "本机用户";
+  $: railAvatarLabel = avatarLabel.trim() || Array.from(displaySelfName)[0] || "灵";
+  $: profileStatusText = profileStatus === "online" ? "在线" : profileStatus === "away" ? "离开" : "隐身";
+  $: loginPasswordReady = !loginEnabled || (loginPasswordDraft.length >= 4 && loginPasswordDraft === loginPasswordConfirmDraft);
   $: showMessageShell = activeSection === "messages";
   $: showInspector = showMessageShell && Boolean(activeConversation) && (inspectorOpen || activeConversation.startsWith("group:"));
   $: networkInputValidation = validateNetworkInputs(seedText, rangeText);
@@ -510,7 +573,10 @@
         transferMenu = null;
         appMenu = null;
         textEditMenu = null;
-        focusSearchToken += 1;
+        if (activeConversation) {
+          conversationSearchOpen = true;
+          conversationSearchFocus = "query";
+        }
       }
     };
     document.addEventListener("contextmenu", handleDocumentContextMenu);
@@ -524,6 +590,44 @@
       demoReplyTimers = [];
     };
   });
+
+  function normalizeAppPreferences(preferences: AppPreferences): AppPreferences {
+    return {
+      dark_mode: preferences.dark_mode,
+      send_shortcut: preferences.send_shortcut === "ctrl_enter" ? "ctrl_enter" : "enter",
+      show_notification_preview: preferences.privacy_mode ? false : preferences.show_notification_preview,
+      privacy_mode: preferences.privacy_mode,
+      close_to_tray: preferences.close_to_tray,
+      login_enabled: Boolean(preferences.login_enabled && preferences.login_password_hash),
+      login_password_hash: preferences.login_password_hash ?? "",
+      profile_signature: preferences.profile_signature ?? "",
+      avatar_label: preferences.avatar_label ?? "",
+      require_contact_for_messaging: Boolean(preferences.require_contact_for_messaging)
+    };
+  }
+
+  function currentAppPreferences(patch: Partial<AppPreferences> = {}): AppPreferences {
+    return normalizeAppPreferences({
+      dark_mode: dark,
+      send_shortcut: sendShortcut,
+      show_notification_preview: showNotificationPreview,
+      privacy_mode: privacyMode,
+      close_to_tray: closeToTray,
+      login_enabled: loginEnabled,
+      login_password_hash: loginPasswordHash,
+      profile_signature: profileSignature,
+      avatar_label: avatarLabel,
+      require_contact_for_messaging: requireContactForMessaging,
+      ...patch
+    });
+  }
+
+  async function sha256Hex(value: string) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
 
   onMount(() => {
     if (!hasTauriRuntime()) return;
@@ -660,58 +764,86 @@
   });
 
   async function bootstrap() {
-    const [
-      profile,
-      peerList,
-      metadataList,
-      conversationList,
-      savedSettings,
-      savedTransportConfig,
-      savedPreferences,
-      savedTransfers,
-      savedStorage,
-      savedTrustedPeers,
-      savedTodoMessages,
-      savedOutboxMessages
-    ] = await Promise.all([
-      getSelfProfile(),
-      listPeers(),
-      listContactMetadata(),
-      listConversations(),
-      getNetworkSettings(),
-      getTransportConfig(),
-      getAppPreferences(),
-      listTransfers(),
-      getStorageOverview(),
-      listTrustedPeers(),
-      listTodoMessages(),
-      listOutboxMessages()
-    ]);
-    self = profile;
-    profileName = profile.display_name;
-    profileHostname = profile.hostname;
-    profileStatus = profile.status;
-    peers = peerList;
-    contactMetadata = Object.fromEntries(metadataList.map((metadata) => [metadata.peer_id, metadata]));
-    conversations = conversationList;
-    settings = savedSettings;
-    transportConfig = savedTransportConfig ?? defaultTransportConfig;
-    dark = savedPreferences.dark_mode;
-    sendShortcut = savedPreferences.send_shortcut;
-    showNotificationPreview = savedPreferences.show_notification_preview;
-    privacyMode = savedPreferences.privacy_mode;
-    closeToTray = savedPreferences.close_to_tray;
-    seedText = savedSettings.seed_peers.join(" ");
-    rangeText = savedSettings.scan_ranges.join(" ");
-    discoveryIntervalText = String(savedSettings.discovery_interval_secs);
-    peerTtlText = String(savedSettings.peer_ttl_secs);
-    transferTasks = savedTransfers;
-    storageOverview = savedStorage;
-    trustedPeers = savedTrustedPeers;
-    todoMessages = savedTodoMessages ?? [];
-    outboxMessages = savedOutboxMessages ?? [];
-    activeConversation = initialConversationId(conversationList);
-    await loadConversation(activeConversation);
+    bootstrapping = true;
+    bootProgress = 12;
+    bootLabel = "正在加载本机身份";
+    try {
+      const [
+        profile,
+        peerList,
+        metadataList,
+        conversationList,
+        savedSettings,
+        savedTransportConfig,
+        savedPreferences,
+        savedTransfers,
+        savedStorage,
+        savedTrustedPeers,
+        savedTodoMessages,
+        savedOutboxMessages
+      ] = await Promise.all([
+        getSelfProfile(),
+        listPeers(),
+        listContactMetadata(),
+        listConversations(),
+        getNetworkSettings(),
+        getTransportConfig(),
+        getAppPreferences(),
+        listTransfers(),
+        getStorageOverview(),
+        listTrustedPeers(),
+        listTodoMessages(),
+        listOutboxMessages()
+      ]);
+      bootProgress = 58;
+      bootLabel = "正在整理会话和联系人";
+      const shouldSeedPreview = peerList.length === 0 && conversationList.length === 0;
+      const effectivePeers = shouldSeedPreview ? [previewPeer, previewOpsPeer] : peerList;
+      const effectiveConversations = shouldSeedPreview ? previewConversations : conversationList;
+      self = profile;
+      profileName = profile.display_name;
+      profileHostname = profile.hostname;
+      profileStatus = profile.status;
+      peers = effectivePeers;
+      contactMetadata = Object.fromEntries(metadataList.map((metadata) => [metadata.peer_id, metadata]));
+      savedContactPeerIds = new Set(metadataList.map((metadata) => metadata.peer_id));
+      conversations = effectiveConversations;
+      settings = savedSettings;
+      transportConfig = savedTransportConfig ?? defaultTransportConfig;
+      const preferences = normalizeAppPreferences(savedPreferences);
+      dark = preferences.dark_mode;
+      sendShortcut = preferences.send_shortcut;
+      showNotificationPreview = preferences.show_notification_preview;
+      privacyMode = preferences.privacy_mode;
+      closeToTray = preferences.close_to_tray;
+      loginEnabled = preferences.login_enabled;
+      loginPasswordHash = preferences.login_password_hash;
+      profileSignature = preferences.profile_signature;
+      avatarLabel = preferences.avatar_label;
+      requireContactForMessaging = preferences.require_contact_for_messaging;
+      appLocked = preferences.login_enabled;
+      loginUnlockDraft = "";
+      loginUnlockError = "";
+      seedText = savedSettings.seed_peers.join(" ");
+      rangeText = savedSettings.scan_ranges.join(" ");
+      discoveryIntervalText = String(savedSettings.discovery_interval_secs);
+      peerTtlText = String(savedSettings.peer_ttl_secs);
+      transferTasks = savedTransfers;
+      storageOverview = savedStorage;
+      trustedPeers = savedTrustedPeers;
+      todoMessages = savedTodoMessages ?? [];
+      outboxMessages = savedOutboxMessages ?? [];
+      activeConversation = initialConversationId(effectiveConversations);
+      bootProgress = 86;
+      bootLabel = activeConversation ? "正在打开最近会话" : "正在准备消息工作台";
+      await loadConversation(activeConversation);
+      bootProgress = 100;
+      bootLabel = "启动完成";
+    } catch (error) {
+      statusText = `启动失败：${error instanceof Error ? error.message : String(error)}`;
+    } finally {
+      bootstrapping = false;
+    }
   }
 
   function initialConversationId(conversationList: ConversationSummary[]) {
@@ -1391,6 +1523,16 @@
         ...contactMetadata,
         [peerId]: saved
       };
+      savedContactPeerIds = new Set([...savedContactPeerIds, peerId]);
+      const savedPeer = peers.find((peer) => peer.peer_id === peerId);
+      if (savedPeer && !saved.blocked) {
+        try {
+          await trustPeer(savedPeer.peer_id, savedPeer.fingerprint);
+          trustedPeers = await listTrustedPeers();
+        } catch (error) {
+          trustStatus = `联系人已保存，自动信任失败：${errorMessage(error)}`;
+        }
+      }
       statusText = saved.blocked
         ? "联系人资料已保存，相关传输授权已撤销"
         : "联系人资料已保存";
@@ -1449,19 +1591,17 @@
   }
 
   async function saveAppPreferencesPatch(patch: Partial<AppPreferences>) {
-    const saved = await updateAppPreferences({
-      dark_mode: dark,
-      send_shortcut: sendShortcut,
-      show_notification_preview: showNotificationPreview,
-      privacy_mode: privacyMode,
-      close_to_tray: closeToTray,
-      ...patch
-    });
+    const saved = await updateAppPreferences(currentAppPreferences(patch));
     dark = saved.dark_mode;
     sendShortcut = saved.send_shortcut;
     showNotificationPreview = saved.show_notification_preview;
     privacyMode = saved.privacy_mode;
     closeToTray = saved.close_to_tray;
+    loginEnabled = saved.login_enabled;
+    loginPasswordHash = saved.login_password_hash;
+    profileSignature = saved.profile_signature;
+    avatarLabel = saved.avatar_label;
+    requireContactForMessaging = saved.require_contact_for_messaging;
     return saved;
   }
 
@@ -1535,6 +1675,20 @@
     } catch (error) {
       closeToTray = previous;
       statusText = `关闭行为保存失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async function toggleRequireContactForMessaging(value: boolean) {
+    const previous = requireContactForMessaging;
+    requireContactForMessaging = value;
+    try {
+      const saved = await saveAppPreferencesPatch({ require_contact_for_messaging: value });
+      statusText = saved.require_contact_for_messaging
+        ? "已开启添加好友后通信"
+        : "已允许局域网发现后直接通信";
+    } catch (error) {
+      requireContactForMessaging = previous;
+      statusText = `通信权限保存失败：${error instanceof Error ? error.message : String(error)}`;
     }
   }
 
@@ -2595,6 +2749,30 @@
     openSettings("profile");
   }
 
+  function openSignatureFromAppMenu() {
+    appMenu = null;
+    openSettings("profile");
+    statusText = "可在个人资料中编辑签名";
+  }
+
+  function openAvatarFromAppMenu() {
+    appMenu = null;
+    openSettings("profile");
+    statusText = "可在个人资料中设置头像文字";
+  }
+
+  function openAppProfileMenu(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    messageMenu = null;
+    conversationMenu = null;
+    contactMenu = null;
+    transferMenu = null;
+    textEditMenu = null;
+    appMenu = clampContextMenuPosition(event, 230, 280);
+    focusContextMenuAfterRender();
+  }
+
   function toggleThemeFromAppMenu() {
     appMenu = null;
     toggleThemePreference();
@@ -2603,6 +2781,57 @@
   async function minimizeToTrayFromAppMenu() {
     appMenu = null;
     await minimizeWindowToTray();
+  }
+
+  async function unlockApp() {
+    loginUnlockError = "";
+    const password = loginUnlockDraft.trim();
+    if (!password) {
+      loginUnlockError = "请输入登录密码";
+      return;
+    }
+    const hash = await sha256Hex(password);
+    if (hash !== loginPasswordHash) {
+      loginUnlockError = "密码不正确";
+      return;
+    }
+    appLocked = false;
+    loginUnlockDraft = "";
+    statusText = "登录成功";
+  }
+
+  async function saveLoginSettings() {
+    try {
+      if (!loginEnabled) {
+        loginPasswordHash = "";
+        loginPasswordDraft = "";
+        loginPasswordConfirmDraft = "";
+        await saveAppPreferencesPatch({ login_enabled: false, login_password_hash: "" });
+        statusText = "登录密码已关闭";
+        return;
+      }
+      if (!loginPasswordReady) {
+        statusText = loginPasswordDraft.length < 4 ? "登录密码至少 4 位" : "两次输入的登录密码不一致";
+        return;
+      }
+      const nextHash = await sha256Hex(loginPasswordDraft);
+      loginPasswordHash = nextHash;
+      loginPasswordDraft = "";
+      loginPasswordConfirmDraft = "";
+      await saveAppPreferencesPatch({ login_enabled: true, login_password_hash: nextHash });
+      statusText = "登录密码已启用，下次启动需要解锁";
+    } catch (error) {
+      statusText = `登录设置保存失败：${errorMessage(error)}`;
+    }
+  }
+
+  async function saveProfileExtras() {
+    try {
+      await saveAppPreferencesPatch({ profile_signature: profileSignature, avatar_label: avatarLabel });
+      statusText = "个人签名和头像已保存";
+    } catch (error) {
+      statusText = `个人扩展资料保存失败：${errorMessage(error)}`;
+    }
   }
 
   async function copyTextEditSelection(cut = false) {
@@ -3629,14 +3858,28 @@
   class:inspector-visible={showInspector}
   class="app"
 >
+  {#if bootstrapping}
+    <section class="startup-progress" role="status" aria-label="启动进度" aria-live="polite">
+      <div class="startup-progress-card">
+        <span class="startup-logo">灵</span>
+        <div>
+          <strong>灵犀内网通</strong>
+          <p>{bootLabel}</p>
+        </div>
+        <progress value={bootProgress} max="100">{bootProgress}%</progress>
+        <small>{bootProgress}%</small>
+      </div>
+    </section>
+  {/if}
+  {#if !appLocked}
   <Rail
     {activeSection}
     {dark}
-    {notificationReady}
     unreadCount={totalUnreadCount}
+    avatarLabel={railAvatarLabel}
     onSelect={selectSection}
-    onOpenNotifications={() => selectSection("notifications")}
     onToggleTheme={toggleThemePreference}
+    onOpenProfileMenu={openAppProfileMenu}
   />
 
   {#if showMessageShell && !showInspector && (statusText.startsWith("已清空 ") || statusText === "会话已删除")}
@@ -3655,18 +3898,10 @@
       {outboxConversationCounts}
       {failedOutboxConversationCounts}
       {typingPreviewByConversation}
-      {query}
-      {focusSearchToken}
       {privacyMode}
-      onQueryChange={(value) => (query = value)}
-      onSearch={handleSearch}
       onSelectConversation={loadConversation}
       onOpenPeerDetails={openPeerDetails}
       onRefreshPeers={refreshPeers}
-      onTogglePin={toggleConversationPinned}
-      onToggleMute={toggleConversationMuted}
-      onToggleArchive={toggleConversationArchived}
-      onDeleteConversation={confirmDeleteConversationById}
       onMarkAllRead={markEveryConversationRead}
       onConversationContext={openConversationContextMenu}
       onPeerContext={openPeerConversationContextMenu}
@@ -3914,6 +4149,13 @@
       {showNotificationPreview}
       {privacyMode}
       {closeToTray}
+      {loginEnabled}
+      {loginPasswordDraft}
+      {loginPasswordConfirmDraft}
+      {loginPasswordReady}
+      {profileSignature}
+      {avatarLabel}
+      {requireContactForMessaging}
       {statusText}
       {trustStatus}
       {trayStatus}
@@ -3955,6 +4197,14 @@
       onToggleNotificationPreview={toggleNotificationPreviewPreference}
       onTogglePrivacyMode={togglePrivacyModePreference}
       onToggleCloseToTray={toggleCloseToTrayPreference}
+      onToggleRequireContactForMessaging={toggleRequireContactForMessaging}
+      onLoginEnabledChange={(value) => (loginEnabled = value)}
+      onLoginPasswordDraftChange={(value) => (loginPasswordDraft = value)}
+      onLoginPasswordConfirmChange={(value) => (loginPasswordConfirmDraft = value)}
+      onSaveLoginSettings={saveLoginSettings}
+      onProfileSignatureChange={(value) => (profileSignature = value)}
+      onAvatarLabelChange={(value) => (avatarLabel = value)}
+      onSaveProfileExtras={saveProfileExtras}
       onRefreshStorage={refreshStorageOverview}
       onMigrateStorageDirectory={chooseAndMigrateStorageDirectory}
       onClearStagedFiles={clearClipboardStaging}
@@ -4022,6 +4272,40 @@
     onContactMetadataChange={updateContactDraft}
     onSaveContactMetadata={saveContactMetadata}
     />
+  {/if}
+  {/if}
+
+  {#if appLocked}
+    <div class="modal-backdrop login-lock-backdrop" role="presentation">
+      <div
+        class="login-lock-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="登录解锁"
+      >
+        <form class="login-lock-form" on:submit|preventDefault={unlockApp}>
+          <span class="startup-logo">灵</span>
+          <div>
+            <span class="eyebrow">本机登录</span>
+            <h2>灵犀内网通已锁定</h2>
+            <p>请输入本机登录密码，解锁后继续内网直连会话。</p>
+          </div>
+          <label class="field">
+            <span>登录密码</span>
+            <input
+              type="password"
+              autocomplete="current-password"
+              value={loginUnlockDraft}
+              on:input={(event) => (loginUnlockDraft = (event.currentTarget as HTMLInputElement).value)}
+            />
+          </label>
+          {#if loginUnlockError}
+            <p class="warning">{loginUnlockError}</p>
+          {/if}
+          <button class="primary-action" type="submit">解锁进入</button>
+        </form>
+      </div>
+    </div>
   {/if}
 
   {#if storageMigrationActive}
@@ -4310,11 +4594,27 @@
       class="context-menu app-context-menu"
       style={`left: ${appMenu.x}px; top: ${appMenu.y}px;`}
       role="menu"
-      aria-label="窗口快捷菜单"
+      aria-label="个人快捷菜单"
       tabindex="-1"
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (appMenu = null))}
     >
+      <div class="profile-menu-card" role="presentation">
+        <span class="profile-menu-avatar">{railAvatarLabel}</span>
+        <div>
+          <strong>{displaySelfName}</strong>
+          <small>{profileSignature || self?.hostname || "内网直连已就绪"}</small>
+        </div>
+        <span class={`profile-menu-status ${profileStatus}`}>{profileStatusText}</span>
+      </div>
+      <button type="button" role="menuitem" on:click={openSignatureFromAppMenu}>
+        <FileText size={13} />
+        编辑签名
+      </button>
+      <button type="button" role="menuitem" on:click={openAvatarFromAppMenu}>
+        <UserRound size={13} />
+        设置头像
+      </button>
       <button type="button" role="menuitem" on:click={refreshPeersFromAppMenu}>
         <RefreshCw size={13} />
         刷新联系人
@@ -4329,7 +4629,7 @@
       </button>
       <button type="button" role="menuitem" on:click={openSettingsFromAppMenu}>
         <Settings size={13} />
-        设置
+        打开设置
       </button>
       <button type="button" role="menuitem" on:click={minimizeToTrayFromAppMenu}>
         <Minimize2 size={13} />

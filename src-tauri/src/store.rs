@@ -44,6 +44,11 @@ pub struct AppPreferences {
     pub show_notification_preview: bool,
     pub privacy_mode: bool,
     pub close_to_tray: bool,
+    pub login_enabled: bool,
+    pub login_password_hash: String,
+    pub profile_signature: String,
+    pub avatar_label: String,
+    pub require_contact_for_messaging: bool,
 }
 
 impl Default for AppPreferences {
@@ -54,6 +59,11 @@ impl Default for AppPreferences {
             show_notification_preview: true,
             privacy_mode: false,
             close_to_tray: true,
+            login_enabled: false,
+            login_password_hash: String::new(),
+            profile_signature: String::new(),
+            avatar_label: String::new(),
+            require_contact_for_messaging: false,
         }
     }
 }
@@ -66,6 +76,10 @@ impl AppPreferences {
         if self.privacy_mode {
             self.show_notification_preview = false;
         }
+        self.login_enabled = self.login_enabled && !self.login_password_hash.trim().is_empty();
+        self.login_password_hash = self.login_password_hash.trim().to_string();
+        self.profile_signature = self.profile_signature.trim().chars().take(80).collect();
+        self.avatar_label = self.avatar_label.trim().chars().take(2).collect();
         self
     }
 }
@@ -3460,6 +3474,9 @@ mod tests {
         assert!(preferences.show_notification_preview);
         assert!(!preferences.privacy_mode);
         assert!(!preferences.close_to_tray);
+        assert!(!preferences.login_enabled);
+        assert!(preferences.login_password_hash.is_empty());
+        assert!(!preferences.require_contact_for_messaging);
     }
 
     #[test]
@@ -3470,6 +3487,11 @@ mod tests {
             show_notification_preview: true,
             privacy_mode: true,
             close_to_tray: true,
+            login_enabled: false,
+            login_password_hash: String::new(),
+            profile_signature: String::new(),
+            avatar_label: String::new(),
+            require_contact_for_messaging: false,
         }
         .normalized();
 

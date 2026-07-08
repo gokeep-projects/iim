@@ -75,6 +75,36 @@ function selfProfile(patch: Partial<PeerProfile> = {}): PeerProfile {
 }
 
 describe("WorkspacePanel search results", () => {
+  it("renders a compact profile card with host, endpoint, and status actions", async () => {
+    const changeStatus = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "profile",
+        self: selfProfile({
+          display_name: "林溪",
+          hostname: "linxi-pc",
+          endpoints: ["192.168.1.77:24251"],
+          status: "away",
+        }),
+        profileName: "林溪",
+        profileHostname: "linxi-pc",
+        profileStatus: "away",
+        onProfileStatusChange: changeStatus,
+      },
+    });
+
+    const card = screen.getByRole("region", { name: "个人名片" });
+    expect(within(card).getByText("林溪")).toBeInTheDocument();
+    expect(within(card).getByText("linxi-pc")).toBeInTheDocument();
+    expect(within(card).getByText("192.168.1.77:24251")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "离开" })).toHaveAttribute("aria-pressed", "true");
+
+    await fireEvent.click(within(card).getByRole("button", { name: "在线" }));
+    expect(changeStatus).toHaveBeenCalledWith("online");
+  });
+
   it("shows user-readable conversation titles for search and favorite messages", () => {
     render(WorkspacePanel, {
       props: {
@@ -272,7 +302,32 @@ describe("WorkspacePanel search results", () => {
 });
 
 describe("WorkspacePanel settings", () => {
-  it("uses the same gray presence tone for every unavailable local status choice", () => {
+  it("shows a focused shortcut settings section for only core message actions", async () => {
+    const toggleSendShortcut = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "preferences",
+        sendShortcut: "enter",
+        onToggleSendShortcut: toggleSendShortcut,
+      },
+    });
+
+    const shortcuts = screen.getByRole("region", { name: "快捷键设置" });
+    expect(within(shortcuts).getByText("发送消息")).toBeInTheDocument();
+    expect(within(shortcuts).getByText("截图")).toBeInTheDocument();
+    expect(within(shortcuts).getByText("打开/关闭窗口")).toBeInTheDocument();
+    expect(within(shortcuts).getByText("Enter")).toBeInTheDocument();
+    expect(within(shortcuts).queryByText("通知预览")).not.toBeInTheDocument();
+    expect(within(shortcuts).queryByText("隐私保护")).not.toBeInTheDocument();
+    expect(within(shortcuts).queryByText("主题")).not.toBeInTheDocument();
+
+    await fireEvent.click(within(shortcuts).getByRole("button", { name: "切换 Ctrl+Enter 发送" }));
+    expect(toggleSendShortcut).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses distinct presence tones for each compact local status choice", () => {
     render(WorkspacePanel, {
       props: {
         section: "settings",
@@ -285,6 +340,10 @@ describe("WorkspacePanel settings", () => {
     const presenceGroup = screen.getByRole("group", {
       name: "本机在线状态",
     });
+    const onlineButton = within(presenceGroup).getByRole("button", { name: "在线" });
+    const awayButton = within(presenceGroup).getByRole("button", { name: "离开" });
+    const offlineButton = within(presenceGroup).getByRole("button", { name: "隐身" });
+    const onlinePresence = within(onlineButton).getByText("", { selector: ".presence-dot" });
     const awayPresence = within(
       within(presenceGroup).getByRole("button", { name: "离开" }),
     ).getByText("", { selector: ".presence-dot" });
@@ -292,8 +351,12 @@ describe("WorkspacePanel settings", () => {
       within(presenceGroup).getByRole("button", { name: "隐身" }),
     ).getByText("", { selector: ".presence-dot" });
 
-    expect(awayPresence).toHaveClass("offline");
-    expect(awayPresence).not.toHaveClass("away");
+    expect(onlineButton).toHaveClass("compact");
+    expect(awayButton).toHaveClass("compact");
+    expect(offlineButton).toHaveClass("compact");
+    expect(onlinePresence).toHaveClass("online");
+    expect(awayPresence).toHaveClass("away");
+    expect(awayPresence).not.toHaveClass("offline");
     expect(offlinePresence).toHaveClass("offline");
     expect(offlinePresence).not.toHaveClass("away");
   });
@@ -420,6 +483,24 @@ describe("WorkspacePanel settings", () => {
     expect(diagnostics).toHaveTextContent(
       "QUIC send failed to 192.168.1.20:24251",
     );
+  });
+
+  it("refreshes network diagnostics from the diagnostics panel", async () => {
+    const refreshPeers = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "network",
+        peers: [selfProfile({ peer_id: "peer-a", status: "online" })],
+        onRefreshPeers: refreshPeers,
+      },
+    });
+
+    const diagnostics = screen.getByLabelText("网络诊断建议");
+    await fireEvent.click(within(diagnostics).getByRole("button", { name: "刷新诊断" }));
+
+    expect(refreshPeers).toHaveBeenCalledTimes(1);
   });
 
   it("copies a network diagnostic report for support handoff", async () => {
@@ -556,6 +637,36 @@ describe("WorkspacePanel settings", () => {
     );
   });
 
+  it("opens storage paths directly from each storage path row", async () => {
+    const openStorage = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "storage",
+        storageOverview: {
+          data_dir: "C:/iim/data",
+          database_path: "C:/iim/data/history.db",
+          database_key_path: "C:/iim/data/history.key",
+          database_key_protection: "DPAPI",
+          received_files_dir: "C:/iim/data/received_files",
+          staged_files_dir: "C:/iim/data/staged",
+          database_bytes: 4096,
+          received_bytes: 1024,
+          staged_bytes: 2048,
+          transfer_task_count: 2,
+        },
+        onOpenStorage: openStorage,
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: "打开接收文件路径" }));
+    await fireEvent.click(screen.getByRole("button", { name: "打开暂存路径" }));
+
+    expect(openStorage).toHaveBeenCalledWith("received");
+    expect(openStorage).toHaveBeenCalledWith("staged");
+  });
+
   it("copies a storage diagnostic report for support handoff", async () => {
     const copyStorageDiagnostics = vi.fn();
     render(WorkspacePanel, {
@@ -665,6 +776,27 @@ describe("WorkspacePanel settings", () => {
       "beta-fingerprint",
       "peer-beta 指纹",
     );
+  });
+
+  it("defaults to open communication and toggles add-friend-only messaging", async () => {
+    const toggleRequireContact = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "security",
+        requireContactForMessaging: false,
+        onToggleRequireContactForMessaging: toggleRequireContact,
+      },
+    });
+
+    const policy = screen.getByRole("group", { name: "通信权限策略" });
+    expect(within(policy).getByRole("button", { name: "无需加好友" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(policy).getByText("首次发现即可直连，TOFU 指纹仍会保护设备身份。")).toBeInTheDocument();
+
+    await fireEvent.click(within(policy).getByRole("button", { name: "需要添加好友" }));
+
+    expect(toggleRequireContact).toHaveBeenCalledWith(true);
   });
 
   it("copies a trusted device audit record with current fingerprint status", async () => {
@@ -917,7 +1049,7 @@ describe("WorkspacePanel transfers", () => {
     expect(copyTransferId).toHaveBeenCalledWith("transfer-history-copy", "history.zip 传输任务 ID");
   });
 
-  it("copies a transfer diagnostic report from the files workspace", async () => {
+  it("keeps transfer diagnostics out of the files workspace surface", () => {
     const copyTransferDiagnostics = vi.fn();
     render(WorkspacePanel, {
       props: {
@@ -955,16 +1087,9 @@ describe("WorkspacePanel transfers", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "复制传输诊断报告" }));
-
-    expect(copyTransferDiagnostics).toHaveBeenCalledTimes(1);
-    const report = copyTransferDiagnostics.mock.calls[0][0] as string;
-    expect(report).toContain("灵犀内网通传输诊断");
-    expect(report).toContain("活跃任务：1");
-    expect(report).toContain("历史任务：2");
-    expect(report).toContain("失败任务：1");
-    expect(report).toContain("文件数量：3");
-    expect(report).toContain("失败清单：failed.zip (transfer-failed-diagnostic) - network lost");
+    expect(screen.queryByRole("button", { name: /诊断/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/传输诊断/)).not.toBeInTheDocument();
+    expect(copyTransferDiagnostics).not.toHaveBeenCalled();
   });
 
   it("copies a single transfer task diagnostic record from active and history rows", async () => {

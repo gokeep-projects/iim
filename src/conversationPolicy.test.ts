@@ -60,6 +60,54 @@ describe("outgoingConversationBlockReason", () => {
       })
     ).toBe("");
   });
+
+  it("allows discovered direct sends without a saved contact by default", () => {
+    expect(
+      outgoingConversationBlockReason({
+        conversationId: "direct:peer-a",
+        recipientPeerIds: ["peer-a"],
+        blockedPeerIds: new Set(),
+        contactPeerIds: new Set(),
+        requireContactForMessaging: false
+      })
+    ).toBe("");
+  });
+
+  it("blocks direct sends to unsaved contacts when friend-only messaging is enabled", () => {
+    expect(
+      outgoingConversationBlockReason({
+        conversationId: "direct:peer-a",
+        recipientPeerIds: ["peer-a"],
+        blockedPeerIds: new Set(),
+        contactPeerIds: new Set(),
+        requireContactForMessaging: true
+      })
+    ).toBe("请先添加好友后再发送消息");
+  });
+
+  it("allows direct sends to saved contacts when friend-only messaging is enabled", () => {
+    expect(
+      outgoingConversationBlockReason({
+        conversationId: "direct:peer-a",
+        recipientPeerIds: ["peer-a"],
+        blockedPeerIds: new Set(),
+        contactPeerIds: new Set(["peer-a"]),
+        requireContactForMessaging: true
+      })
+    ).toBe("");
+  });
+
+  it("blocks group sends while any sendable member is not a saved contact", () => {
+    expect(
+      outgoingConversationBlockReason({
+        conversationId: "group:ops",
+        recipientPeerIds: ["peer-a", "peer-b", "peer-c"],
+        blockedPeerIds: new Set(["peer-c"]),
+        contactPeerIds: new Set(["peer-a"]),
+        requireContactForMessaging: true
+      })
+    ).toBe("有 1 名群成员尚未添加好友，请添加后再发送消息");
+  });
 });
 
 describe("groupFileTransferBlockReason", () => {

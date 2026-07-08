@@ -50,6 +50,13 @@
   export let showNotificationPreview = true;
   export let privacyMode = false;
   export let closeToTray = true;
+  export let loginEnabled = false;
+  export let loginPasswordDraft = "";
+  export let loginPasswordConfirmDraft = "";
+  export let loginPasswordReady = true;
+  export let profileSignature = "";
+  export let avatarLabel = "";
+  export let requireContactForMessaging = false;
   export let statusText = "";
   export let trustStatus = "";
   export let trayStatus = "";
@@ -84,6 +91,14 @@
   export let onToggleNotificationPreview: () => void | Promise<void> = () => {};
   export let onTogglePrivacyMode: () => void | Promise<void> = () => {};
   export let onToggleCloseToTray: () => void | Promise<void> = () => {};
+  export let onToggleRequireContactForMessaging: (value: boolean) => void | Promise<void> = () => {};
+  export let onLoginEnabledChange: (value: boolean) => void = () => {};
+  export let onLoginPasswordDraftChange: (value: string) => void = () => {};
+  export let onLoginPasswordConfirmChange: (value: string) => void = () => {};
+  export let onSaveLoginSettings: () => void | Promise<void> = () => {};
+  export let onProfileSignatureChange: (value: string) => void = () => {};
+  export let onAvatarLabelChange: (value: string) => void = () => {};
+  export let onSaveProfileExtras: () => void | Promise<void> = () => {};
   export let onRefreshStorage: () => void | Promise<void> = () => {};
   export let onMigrateStorageDirectory: () => void | Promise<void> = () => {};
   export let onClearStagedFiles: () => void | Promise<void> = () => {};
@@ -118,9 +133,9 @@
     { id: "preferences", label: "偏好", icon: Palette }
   ];
 
-  const profileStatusChoices: Array<{ value: PeerStatus; label: string; tone: "online" | "offline" }> = [
+  const profileStatusChoices: Array<{ value: PeerStatus; label: string; tone: "online" | "away" | "offline" }> = [
     { value: "online", label: "在线", tone: "online" },
-    { value: "away", label: "离开", tone: "offline" },
+    { value: "away", label: "离开", tone: "away" },
     { value: "offline", label: "隐身", tone: "offline" }
   ];
   const transferStatusFilters: Array<{ id: TransferStatusFilter; label: string }> = [
@@ -318,12 +333,12 @@
 
   function storagePathRows(overview: StorageOverview | null) {
     return [
-      { label: "应用数据", value: overview?.data_dir ?? "", fallback: "等待加载", copyLabel: "应用数据路径" },
-      { label: "加密数据库", value: overview?.database_path ?? "", fallback: "等待加载", copyLabel: "加密数据库路径" },
-      { label: "密钥保护", value: overview?.database_key_protection ?? "", fallback: "等待加载", copyLabel: "" },
-      { label: "密钥文件", value: overview?.database_key_path ?? "", fallback: "等待加载", copyLabel: "密钥文件路径" },
-      { label: "接收文件", value: overview?.received_files_dir ?? "", fallback: "等待加载", copyLabel: "接收文件路径" },
-      { label: "剪贴板暂存", value: overview?.staged_files_dir ?? "", fallback: "等待加载", copyLabel: "剪贴板暂存路径" }
+      { label: "应用数据", value: overview?.data_dir ?? "", fallback: "等待加载", copyLabel: "应用数据路径", openLabel: "应用数据路径", kind: "data" as const },
+      { label: "加密数据库", value: overview?.database_path ?? "", fallback: "等待加载", copyLabel: "加密数据库路径", openLabel: "", kind: null },
+      { label: "密钥保护", value: overview?.database_key_protection ?? "", fallback: "等待加载", copyLabel: "", openLabel: "", kind: null },
+      { label: "密钥文件", value: overview?.database_key_path ?? "", fallback: "等待加载", copyLabel: "密钥文件路径", openLabel: "", kind: null },
+      { label: "接收文件", value: overview?.received_files_dir ?? "", fallback: "等待加载", copyLabel: "接收文件路径", openLabel: "接收文件路径", kind: "received" as const },
+      { label: "剪贴板暂存", value: overview?.staged_files_dir ?? "", fallback: "等待加载", copyLabel: "剪贴板暂存路径", openLabel: "暂存路径", kind: "staged" as const }
     ];
   }
 
@@ -553,6 +568,10 @@
   $: selfFingerprint = self?.fingerprint ?? "等待身份初始化";
   $: shortSelfDeviceId = selfDeviceId.length > 18 ? `${selfDeviceId.slice(0, 18)}...` : selfDeviceId;
   $: shortSelfFingerprint = selfFingerprint.length > 24 ? `${selfFingerprint.slice(0, 24)}...` : selfFingerprint;
+  $: profileDisplayName = profileName.trim() || self?.display_name || "本机用户";
+  $: profileHostLabel = profileHostname.trim() || self?.hostname || "等待主机名";
+  $: profileEndpointLabel = self?.endpoints[0] ?? `${transportConfig.listen_port}/QUIC`;
+  $: profileAvatarInitial = Array.from(profileDisplayName.trim())[0] ?? "我";
   $: storageCacheBytes = storageOverview ? storageOverview.received_bytes + storageOverview.staged_bytes : 0;
   $: activeTransferTasks = transferTasks.filter(isActiveTransfer);
   $: historyTransferTasks = transferTasks.filter((task) => !isActiveTransfer(task));
@@ -1047,10 +1066,6 @@
         {/if}
       </div>
       <div class="workspace-head-actions">
-        <button class="tool-button" type="button" aria-label="复制传输诊断报告" title="复制传输诊断报告" on:click={() => onCopyTransferDiagnostics(transferDiagnosticReport())}>
-          <Copy size={15} />
-          诊断报告
-        </button>
         <button class="tool-button" type="button" on:click={onClearCompletedTransfers}>
           <Trash2 size={15} />
           清理已完成
@@ -1156,11 +1171,6 @@
                   }}>
                     <RefreshCw size={13} />
                     清空筛选
-                  </button>
-                {:else}
-                  <button class="row-action" type="button" on:click={() => onCopyTransferDiagnostics(transferDiagnosticReport())}>
-                    <Copy size={13} />
-                    诊断
                   </button>
                 {/if}
               </div>
@@ -1327,6 +1337,33 @@
 
       <div class="settings-section">
         {#if settingsTab === "profile"}
+          <section class="settings-profile-hero" aria-label="个人名片">
+            <div class="profile-avatar-button" aria-label="头像">
+              <span>{profileAvatarInitial}</span>
+            </div>
+            <div class="profile-hero-copy">
+              <span class="eyebrow">本机资料</span>
+              <strong>{profileDisplayName}</strong>
+              <div class="profile-hero-meta">
+                <span>{profileHostLabel}</span>
+                <span>{profileEndpointLabel}</span>
+              </div>
+            </div>
+            <div class="profile-status-buttons" role="group" aria-label="本机在线状态">
+              {#each profileStatusChoices as choice (choice.value)}
+                <button
+                  class:active={profileStatus === choice.value}
+                  class="status-choice compact"
+                  type="button"
+                  aria-pressed={profileStatus === choice.value}
+                  on:click={() => onProfileStatusChange(choice.value)}
+                >
+                  <span class={`presence-dot ${choice.tone}`}></span>
+                  {choice.label}
+                </button>
+              {/each}
+            </div>
+          </section>
           <section class="settings-info-card settings-profile-card" aria-label="设备身份">
             <header>
               <Users size={16} />
@@ -1369,23 +1406,6 @@
               <span>主机备注</span>
               <input value={profileHostname} placeholder={self?.hostname ?? "windows-pc"} on:input={(event) => onProfileHostnameChange((event.currentTarget as HTMLInputElement).value)} />
             </label>
-            <div class="field full-span">
-              <span>在线状态</span>
-              <div class="presence-choice-grid" role="group" aria-label="本机在线状态">
-                {#each profileStatusChoices as choice (choice.value)}
-                  <button
-                    class:active={profileStatus === choice.value}
-                    class="status-choice"
-                    type="button"
-                    aria-pressed={profileStatus === choice.value}
-                    on:click={() => onProfileStatusChange(choice.value)}
-                  >
-                    <span class={`presence-dot ${choice.tone}`}></span>
-                    {choice.label}
-                  </button>
-                {/each}
-              </div>
-            </div>
           </div>
           <div class="settings-action-bar">
             <button class="primary-action settings-primary-action" type="button" on:click={onSaveProfile}>
@@ -1462,10 +1482,16 @@
                 <strong>网络诊断</strong>
                 <span>根据联系人可达状态和最近警告生成排查建议。</span>
               </div>
-              <button class="section-compact-action" type="button" on:click={() => onCopyNetworkDiagnostics(networkDiagnosticReport())}>
-                <Copy size={12} />
-                复制诊断报告
-              </button>
+              <div class="settings-header-actions">
+                <button class="section-compact-action" type="button" on:click={onRefreshPeers}>
+                  <RefreshCw size={12} />
+                  刷新诊断
+                </button>
+                <button class="section-compact-action" type="button" on:click={() => onCopyNetworkDiagnostics(networkDiagnosticReport())}>
+                  <Copy size={12} />
+                  复制诊断报告
+                </button>
+              </div>
             </header>
             <div class="diagnostic-list">
               {#each networkDiagnostics as item}
@@ -1554,6 +1580,17 @@
                     >
                       <Copy size={12} />
                       复制
+                    </button>
+                  {/if}
+                  {#if row.value && row.kind && row.openLabel}
+                    <button
+                      type="button"
+                      aria-label={`打开${row.openLabel}`}
+                      title={`打开${row.openLabel}`}
+                      on:click={() => onOpenStorage(row.kind)}
+                    >
+                      <HardDrive size={12} />
+                      打开
                     </button>
                   {/if}
                 </dd>
@@ -1646,6 +1683,40 @@
             </section>
           {/if}
         {:else if settingsTab === "security"}
+          <section class="settings-action-panel security-policy-panel" aria-label="通信权限">
+            <header>
+              <strong>通信权限</strong>
+              <span>默认无需加好友即可通信；开启后，仅好友/已信任联系人能直接发起会话。</span>
+            </header>
+            <div class="security-policy-options" role="group" aria-label="通信权限策略">
+              <button
+                class:active={!requireContactForMessaging}
+                type="button"
+                aria-label="无需加好友"
+                aria-pressed={!requireContactForMessaging}
+                on:click={() => onToggleRequireContactForMessaging(false)}
+              >
+                <ShieldCheck size={16} />
+                <span>
+                  <strong>无需加好友</strong>
+                  <small>首次发现即可直连，TOFU 指纹仍会保护设备身份。</small>
+                </span>
+              </button>
+              <button
+                class:active={requireContactForMessaging}
+                type="button"
+                aria-label="需要添加好友"
+                aria-pressed={requireContactForMessaging}
+                on:click={() => onToggleRequireContactForMessaging(true)}
+              >
+                <Users size={16} />
+                <span>
+                  <strong>需要添加好友</strong>
+                  <small>加为联系人后默认信任设备，再允许消息和文件通信。</small>
+                </span>
+              </button>
+            </div>
+          </section>
           <section class="settings-info-card" aria-label="信任概览">
             <header>
               <ShieldCheck size={16} />
@@ -1804,6 +1875,108 @@
               </button>
             </div>
           </section>
+          <section class="settings-action-panel login-preference-panel" aria-label="登录与个人展示">
+            <header>
+              <strong>登录与个人展示</strong>
+              <span>默认无需登录；启用后，下次启动会先要求输入本机密码。</span>
+            </header>
+            <div class="login-preference-layout">
+              <button class:enabled={loginEnabled} class="preference-toggle login-toggle" type="button" aria-label={loginEnabled ? "关闭登录密码" : "启用登录密码"} on:click={() => onLoginEnabledChange(!loginEnabled)}>
+                <ShieldCheck size={16} />
+                <span>
+                  <strong>登录密码</strong>
+                  <small>{loginEnabled ? "下次启动需要解锁" : "默认直接进入"}</small>
+                </span>
+              </button>
+              <div class="login-fields">
+                <label class="field">
+                  <span>新登录密码</span>
+                  <input
+                    type="password"
+                    value={loginPasswordDraft}
+                    disabled={!loginEnabled}
+                    autocomplete="new-password"
+                    placeholder="至少 4 位"
+                    on:input={(event) => onLoginPasswordDraftChange((event.currentTarget as HTMLInputElement).value)}
+                  />
+                </label>
+                <label class="field">
+                  <span>确认密码</span>
+                  <input
+                    type="password"
+                    value={loginPasswordConfirmDraft}
+                    disabled={!loginEnabled}
+                    autocomplete="new-password"
+                    placeholder="再次输入"
+                    on:input={(event) => onLoginPasswordConfirmChange((event.currentTarget as HTMLInputElement).value)}
+                  />
+                </label>
+                <button class="primary-action settings-primary-action" type="button" disabled={loginEnabled && !loginPasswordReady} on:click={onSaveLoginSettings}>
+                  <Save size={15} />
+                  保存登录设置
+                </button>
+              </div>
+            </div>
+            <div class="profile-extra-grid">
+              <label class="field">
+                <span>个人签名</span>
+                <input
+                  value={profileSignature}
+                  maxlength="80"
+                  placeholder="例如：专注内网直连"
+                  on:input={(event) => onProfileSignatureChange((event.currentTarget as HTMLInputElement).value)}
+                />
+              </label>
+              <label class="field">
+                <span>头像文字</span>
+                <input
+                  value={avatarLabel}
+                  maxlength="2"
+                  placeholder="灵"
+                  on:input={(event) => onAvatarLabelChange((event.currentTarget as HTMLInputElement).value)}
+                />
+              </label>
+              <button class="primary-action settings-primary-action" type="button" on:click={onSaveProfileExtras}>
+                <Save size={15} />
+                保存展示资料
+              </button>
+            </div>
+          </section>
+          <section class="settings-action-panel shortcut-settings-panel" aria-label="快捷键设置">
+            <header>
+              <Keyboard size={16} />
+              <div>
+                <strong>快捷键设置</strong>
+                <span>只保留日常沟通最高频的操作，避免把通知、主题等杂项混进快捷键里。</span>
+              </div>
+            </header>
+            <div class="shortcut-settings-grid">
+              <button class:enabled={sendShortcut === "ctrl_enter"} class="shortcut-setting-card configurable" type="button" aria-label={sendShortcut === "enter" ? "切换 Ctrl+Enter 发送" : "切换 Enter 发送"} on:click={onToggleSendShortcut}>
+                <MessageSquareText size={16} />
+                <span>
+                  <strong>发送消息</strong>
+                  <small>当前使用 {sendShortcut === "enter" ? "Enter" : "Ctrl+Enter"}</small>
+                </span>
+                <kbd>{sendShortcut === "enter" ? "Enter" : "Ctrl+Enter"}</kbd>
+              </button>
+              <article class="shortcut-setting-card" aria-label="截图快捷键">
+                <Square size={16} />
+                <span>
+                  <strong>截图</strong>
+                  <small>截屏完成后可直接粘贴到聊天输入框</small>
+                </span>
+                <kbd>Ctrl+Shift+S</kbd>
+              </article>
+              <article class="shortcut-setting-card" aria-label="打开/关闭窗口快捷键">
+                <Minimize2 size={16} />
+                <span>
+                  <strong>打开/关闭窗口</strong>
+                  <small>{closeToTray ? "关闭后隐藏到托盘，托盘可恢复窗口" : "关闭按钮直接关闭窗口"}</small>
+                </span>
+                <kbd>Alt+F4</kbd>
+              </article>
+            </div>
+          </section>
           <section class="settings-action-panel settings-preference-panel" aria-label="偏好开关">
             <header>
               <strong>偏好开关</strong>
@@ -1822,13 +1995,6 @@
                 <span>
                   <strong>主题</strong>
                   <small>{dark ? "深色" : "浅色"}</small>
-                </span>
-              </button>
-              <button class:enabled={sendShortcut === "ctrl_enter"} class="preference-toggle" type="button" aria-label={sendShortcut === "enter" ? "切换 Ctrl+Enter 发送" : "切换 Enter 发送"} on:click={onToggleSendShortcut}>
-                <Keyboard size={16} />
-                <span>
-                  <strong>发送键</strong>
-                  <small>{sendShortcut === "enter" ? "Enter" : "Ctrl+Enter"}</small>
                 </span>
               </button>
               <button class:enabled={privacyMode} class="preference-toggle" type="button" aria-label={privacyMode ? "关闭隐私模式" : "开启隐私模式"} on:click={onTogglePrivacyMode}>

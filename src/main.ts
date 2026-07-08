@@ -12,4 +12,8 @@ if (!target) {
 
 const app = mount(App, { target });
 
+requestAnimationFrame(() => {
+  document.getElementById("startup-shell")?.remove();
+});
+
 export default app;

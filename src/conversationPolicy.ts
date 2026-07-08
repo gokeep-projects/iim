@@ -33,6 +33,8 @@ export interface OutgoingConversationBlockInput {
   conversationId: string;
   recipientPeerIds: string[];
   blockedPeerIds: Set<string>;
+  contactPeerIds?: Set<string>;
+  requireContactForMessaging?: boolean;
 }
 
 export function outgoingConversationBlockReason(input: OutgoingConversationBlockInput): string {
@@ -43,8 +45,24 @@ export function outgoingConversationBlockReason(input: OutgoingConversationBlock
     return "联系人已被阻止，不能发送消息";
   }
 
+  if (
+    input.requireContactForMessaging &&
+    input.conversationId.startsWith("direct:") &&
+    recipients.some((peerId) => !input.contactPeerIds?.has(peerId))
+  ) {
+    return "请先添加好友后再发送消息";
+  }
+
   if (input.conversationId.startsWith("group:") && recipients.every((peerId) => input.blockedPeerIds.has(peerId))) {
     return "群聊没有可发送的未阻止成员";
+  }
+
+  if (input.requireContactForMessaging && input.conversationId.startsWith("group:")) {
+    const sendableRecipients = recipients.filter((peerId) => !input.blockedPeerIds.has(peerId));
+    const missingContactCount = sendableRecipients.filter((peerId) => !input.contactPeerIds?.has(peerId)).length;
+    if (missingContactCount > 0) {
+      return `有 ${missingContactCount} 名群成员尚未添加好友，请添加后再发送消息`;
+    }
   }
 
   return "";

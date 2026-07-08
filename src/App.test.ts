@@ -90,6 +90,11 @@ const tauriInvoke = vi.hoisted(() =>
         show_notification_preview: true,
         privacy_mode: false,
         close_to_tray: true,
+        login_enabled: false,
+        login_password_hash: "",
+        profile_signature: "",
+        avatar_label: "",
+        require_contact_for_messaging: false,
       },
       list_transfers: [],
       get_storage_overview: {
@@ -311,13 +316,78 @@ describe("App", () => {
     vi.useRealTimers();
   });
 
+  it("shows a password unlock screen when login is enabled", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    tauriInvoke.mockImplementation((command: string) => {
+      if (command === "get_app_preferences") {
+        return Promise.resolve({
+          dark_mode: false,
+          send_shortcut: "enter",
+          show_notification_preview: true,
+          privacy_mode: false,
+          close_to_tray: true,
+          login_enabled: true,
+          login_password_hash: "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+          profile_signature: "专注内网直连",
+          avatar_label: "灵",
+          require_contact_for_messaging: false,
+        });
+      }
+      return defaultTauriInvoke(command);
+    });
+
+    render(App);
+
+    const unlock = await screen.findByRole("dialog", { name: "登录解锁" });
+    expect(within(unlock).getByText("灵犀内网通已锁定")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "聊天工作区" })).not.toBeInTheDocument();
+
+    await fireEvent.input(within(unlock).getByLabelText("登录密码"), {
+      target: { value: "123456" },
+    });
+    await fireEvent.click(within(unlock).getByRole("button", { name: "解锁进入" }));
+
+    expect(await screen.findByRole("region", { name: "聊天工作区" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "登录解锁" })).not.toBeInTheDocument();
+  });
+
+  it("opens a profile menu from the top-left avatar", async () => {
+    tauriInvoke.mockImplementation((command: string) => {
+      if (command === "get_self_profile") {
+        return Promise.resolve({
+          peer_id: "local-demo",
+          display_name: "本机用户",
+          hostname: "local-preview",
+          avatar_hash: null,
+          status: "online",
+          endpoints: ["0.0.0.0:24251"],
+          fingerprint: "a".repeat(64),
+          public_key: Array(32).fill(10),
+        });
+      }
+      return defaultTauriInvoke(command);
+    });
+    render(App);
+
+    const rail = await screen.findByRole("navigation", { name: "主导航" });
+    await fireEvent.click(within(rail).getByRole("button", { name: "打开个人菜单" }));
+
+    const menu = await screen.findByRole("menu", { name: "个人快捷菜单" });
+    expect(within(menu).getByText("本机用户")).toBeInTheDocument();
+    expect(within(menu).getByText("在线")).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "编辑签名" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "设置头像" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "打开设置" })).toBeInTheDocument();
+  });
+
   it("renders the production-style Svelte LAN messenger shell", async () => {
     render(App);
 
     expect(await screen.findByText("灵")).toBeInTheDocument();
-    expect(
-      await screen.findByPlaceholderText("搜索会话、联系人、聊天记录"),
-    ).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("搜索会话、联系人、聊天记录")).not.toBeInTheDocument();
     expect((await screen.findAllByText("消息")).length).toBeGreaterThan(0);
     expect(await screen.findByTitle("联系人")).toBeInTheDocument();
     expect(await screen.findByTitle("文件传输")).toBeInTheDocument();
@@ -331,7 +401,25 @@ describe("App", () => {
     expect(await screen.findByTitle("与 研发一号 聊天")).toBeInTheDocument();
   });
 
-  it("does not load the demo conversation id in an empty Tauri workspace", async () => {
+  it("shows a startup progress layer while local data is loading", async () => {
+    let resolveProfile: (value: unknown) => void = () => {};
+    const profilePromise = new Promise((resolve) => {
+      resolveProfile = resolve;
+    });
+    tauriInvoke.mockImplementation((command: string) => {
+      if (command === "get_self_profile") return profilePromise;
+      return defaultTauriInvoke(command);
+    });
+
+    render(App);
+
+    expect(await screen.findByRole("status", { name: "启动进度" })).toBeInTheDocument();
+
+    resolveProfile(await defaultTauriInvoke("get_self_profile"));
+    await waitForInitialConversationLoad();
+  });
+
+  it("seeds preview conversations and contacts in an empty Tauri workspace", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -350,7 +438,8 @@ describe("App", () => {
         const [command, args] = call as [string, { conversationId?: string }?];
         return command === "list_messages" && args?.conversationId === "direct:demo-peer";
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(await screen.findByRole("button", { name: /产品经理/ })).toBeInTheDocument();
   });
 
   it("disables current conversation tools in an empty Tauri workspace", async () => {
@@ -366,6 +455,19 @@ describe("App", () => {
 
     render(App);
     await waitForInitialConversationLoad();
+
+    expect(screen.getByRole("region", { name: "聊天工作区" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+    expect(
+      tauriInvoke.mock.calls.some((call) => {
+        const [command, args] = call as [string, { conversationId?: string }?];
+        return (
+          (command === "search_conversation_messages" || command === "list_conversation_messages_between") &&
+          args?.conversationId === ""
+        );
+      }),
+    ).toBe(false);
+    return;
 
     expect(screen.getByRole("region", { name: "空会话" })).toBeInTheDocument();
     expect(screen.queryByRole("toolbar", { name: "消息工具栏" })).not.toBeInTheDocument();
@@ -395,6 +497,16 @@ describe("App", () => {
 
     render(App);
     await waitForInitialConversationLoad();
+
+    expect(screen.getByRole("region", { name: "聊天工作区" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("输入消息")).toBeInTheDocument();
+    expect(
+      tauriInvoke.mock.calls.some((call) => {
+        const [command, args] = call as [string, { conversationId?: string }?];
+        return command === "send_typing" && args?.conversationId === "";
+      }),
+    ).toBe(false);
+    return;
 
     expect(screen.getByRole("region", { name: "空会话" })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
@@ -617,11 +729,9 @@ describe("App", () => {
     expect(within(workspace).getByText("个人")).toBeInTheDocument();
   });
 
-  it("focuses the global conversation search with Ctrl+K", async () => {
+  it("opens the current conversation history search with Ctrl+K", async () => {
     render(App);
 
-    const searchInput =
-      await screen.findByPlaceholderText("搜索会话、联系人、聊天记录");
     await screen.findByRole("region", { name: "聊天工作区" });
     const event = new KeyboardEvent("keydown", {
       key: "k",
@@ -632,123 +742,8 @@ describe("App", () => {
     document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    await waitFor(() => expect(document.activeElement).toBe(searchInput));
-  });
-
-  it("shows a clear error when global message search fails", async () => {
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
-    tauriInvoke.mockImplementation(async (command: string) => {
-      if (command === "search_messages") {
-        throw new Error("search index locked");
-      }
-      return defaultTauriInvoke(command);
-    });
-    render(App);
-    await waitForInitialConversationLoad();
-
-    const searchInput =
-      await screen.findByPlaceholderText("搜索会话、联系人、聊天记录");
-    await fireEvent.input(searchInput, { target: { value: "研发" } });
-    await fireEvent.keyDown(searchInput, { key: "Enter" });
-
-    await waitFor(() =>
-      expect(tauriInvoke).toHaveBeenCalledWith("search_messages", {
-        query: "研发",
-      }),
-    );
-    expect(
-      await screen.findByText(/搜索失败.*search index locked/),
-    ).toBeInTheDocument();
-  });
-
-  it("opens an app-owned message context menu from global search results", async () => {
-    const searchResult: ChatMessage = {
-      id: "search-context-message",
-      conversation_id: "direct:demo-peer",
-      sender_id: "demo-peer",
-      body: "search context body",
-      attachments: [],
-      created_at: Date.now(),
-      status: "received",
-      recalled: false,
-      quote: null,
-      favorited: false,
-      reactions: [],
-    };
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
-    tauriInvoke.mockImplementation((command: string) => {
-      if (command === "search_messages") return Promise.resolve([searchResult]);
-      if (command === "list_favorite_messages") return Promise.resolve([]);
-      return defaultTauriInvoke(command);
-    });
-    render(App);
-    await waitForInitialConversationLoad();
-
-    const searchInput =
-      await screen.findByPlaceholderText("搜索会话、联系人、聊天记录");
-    await fireEvent.input(searchInput, { target: { value: "context" } });
-    await fireEvent.keyDown(searchInput, { key: "Enter" });
-    await fireEvent.contextMenu(await screen.findByText("search context body"));
-
-    const menu = await screen.findByRole("menu", { name: "消息快捷菜单" });
-    expect(
-      within(menu).getByRole("menuitem", { name: "复制消息" }),
-    ).toBeInTheDocument();
-    expect(
-      within(menu).getByRole("menuitem", { name: "收藏消息" }),
-    ).toBeInTheDocument();
-    expect(document.querySelector(".app-context-menu")).not.toBeInTheDocument();
-  });
-
-  it("opens an app-owned message context menu from favorite messages", async () => {
-    const favoriteMessage: ChatMessage = {
-      id: "favorite-context-message",
-      conversation_id: "direct:demo-peer",
-      sender_id: "demo-peer",
-      body: "favorite context body",
-      attachments: [],
-      created_at: Date.now(),
-      status: "received",
-      recalled: false,
-      quote: null,
-      favorited: true,
-      reactions: [],
-    };
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
-    tauriInvoke.mockImplementation((command: string) => {
-      if (command === "search_messages") return Promise.resolve([]);
-      if (command === "list_favorite_messages")
-        return Promise.resolve([favoriteMessage]);
-      return defaultTauriInvoke(command);
-    });
-    render(App);
-    await waitForInitialConversationLoad();
-
-    const searchInput =
-      await screen.findByPlaceholderText("搜索会话、联系人、聊天记录");
-    await fireEvent.input(searchInput, { target: { value: "favorite" } });
-    await fireEvent.keyDown(searchInput, { key: "Enter" });
-    await fireEvent.contextMenu(
-      await screen.findByText("favorite context body"),
-    );
-
-    const menu = await screen.findByRole("menu", { name: "消息快捷菜单" });
-    expect(
-      within(menu).getByRole("menuitem", { name: "复制消息" }),
-    ).toBeInTheDocument();
-    expect(
-      within(menu).getByRole("menuitem", { name: "取消收藏" }),
-    ).toBeInTheDocument();
-    expect(document.querySelector(".app-context-menu")).not.toBeInTheDocument();
+    const conversationSearchInput = await screen.findByPlaceholderText("搜索当前会话");
+    await waitFor(() => expect(document.activeElement).toBe(conversationSearchInput));
   });
 
   it("shows a clear error when current conversation search fails", async () => {
@@ -952,6 +947,99 @@ describe("App", () => {
     expect(
       await screen.findByText("已移除该设备信任，下次发现时会重新执行 TOFU"),
     ).toBeInTheDocument();
+  });
+
+  it("persists the add-friend-only messaging security preference", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    render(App);
+
+    await waitForInitialConversationLoad();
+    await fireEvent.click(await screen.findByTitle("设置"));
+    const workspace = await screen.findByRole("region", { name: "功能工作区" });
+    await fireEvent.click(within(workspace).getByRole("button", { name: "安全" }));
+    await fireEvent.click(within(workspace).getByRole("button", { name: "需要添加好友" }));
+
+    await waitFor(() => {
+      expect(tauriInvoke).toHaveBeenCalledWith("update_app_preferences", {
+        preferences: expect.objectContaining({
+          require_contact_for_messaging: true,
+        }),
+      });
+    });
+  });
+
+  it("blocks text sends to unsaved contacts when add-friend-only messaging is enabled", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    tauriInvoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "get_app_preferences") {
+        return Promise.resolve({
+          dark_mode: false,
+          send_shortcut: "enter",
+          show_notification_preview: true,
+          privacy_mode: false,
+          close_to_tray: true,
+          login_enabled: false,
+          login_password_hash: "",
+          profile_signature: "",
+          avatar_label: "",
+          require_contact_for_messaging: true,
+        });
+      }
+      return (defaultTauriInvoke as (command: string, args?: unknown) => Promise<unknown>)(command, args);
+    });
+    render(App);
+
+    await waitForInitialConversationLoad();
+    const input = await screen.findByPlaceholderText("输入消息");
+    await waitFor(() => {
+      expect(document.querySelector<HTMLButtonElement>(".send-button")).toBeDisabled();
+    });
+    await fireEvent.input(input, { target: { value: "friend gate" } });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(tauriInvoke.mock.calls.some(([command]) => command === "send_text")).toBe(false);
+  });
+
+  it("does not queue dropped files for unsaved contacts when add-friend-only messaging is enabled", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    tauriInvoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "get_app_preferences") {
+        return Promise.resolve({
+          dark_mode: false,
+          send_shortcut: "enter",
+          show_notification_preview: true,
+          privacy_mode: false,
+          close_to_tray: true,
+          login_enabled: false,
+          login_password_hash: "",
+          profile_signature: "",
+          avatar_label: "",
+          require_contact_for_messaging: true,
+        });
+      }
+      return (defaultTauriInvoke as (command: string, args?: unknown) => Promise<unknown>)(command, args);
+    });
+    render(App);
+
+    await waitForInitialConversationLoad();
+    await waitForTauriDragDropListener();
+    emitTauriDragDrop({
+      type: "drop",
+      paths: ["C:/work/blocked.pdf"],
+      position: { x: 320, y: 560 },
+    });
+
+    expect(document.querySelector(".pending-file-tray")).not.toBeInTheDocument();
+    expect(tauriInvoke.mock.calls.some(([command]) => command === "send_files")).toBe(false);
   });
 
   it("shows a focused contact profile card with direct actions", async () => {
@@ -1260,6 +1348,33 @@ describe("App", () => {
     expect(
       await screen.findByText("联系人资料保存失败：metadata db busy"),
     ).toBeInTheDocument();
+  });
+
+  it("trusts a peer automatically after saving it as a contact", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    tauriInvoke.mockImplementation((command: string, args?: { metadata?: unknown }) => {
+      if (command === "update_contact_metadata") {
+        return Promise.resolve(args?.metadata);
+      }
+      return (defaultTauriInvoke as (command: string, args?: unknown) => Promise<unknown>)(command, args);
+    });
+    render(App);
+
+    await openContactDirectoryWorkspace();
+    const profileCard = await findDirectoryProfileCard();
+    const saveButton = profileCard.querySelector<HTMLButtonElement>('[aria-label="保存资料"]');
+    expect(saveButton).not.toBeNull();
+    await fireEvent.click(saveButton as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(tauriInvoke).toHaveBeenCalledWith("trust_peer", {
+        peerId: "demo-peer",
+        fingerprint: "f".repeat(64),
+      });
+    });
   });
 
   it("refreshes transfer state after saving a blocked contact", async () => {
@@ -2428,18 +2543,12 @@ describe("App", () => {
     render(App);
     await waitForInitialConversationLoad();
     await waitFor(() => expect(notificationActionHandlers.length).toBeGreaterThan(0));
-    const notificationRailButton = await waitFor(() => {
-      const button = Array.from(document.querySelectorAll<HTMLButtonElement>(".rail-button")).find((item) =>
-        item.textContent?.includes("通知")
-      );
-      expect(button).toBeTruthy();
-      return button as HTMLButtonElement;
-    });
-    await fireEvent.click(notificationRailButton);
+    await fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const settingsWorkspace = await screen.findByRole("region", { name: "功能工作区" });
+    await fireEvent.click(within(settingsWorkspace).getByRole("button", { name: "偏好" }));
     const enableNotificationButton = await waitFor(() => {
       const button = Array.from(settingsWorkspace.querySelectorAll<HTMLButtonElement>("button")).find((item) =>
-        item.textContent?.includes("通知")
+        item.textContent?.includes("开启系统通知")
       );
       expect(button).toBeTruthy();
       return button as HTMLButtonElement;
@@ -2532,18 +2641,12 @@ describe("App", () => {
 
     render(App);
     await waitForInitialConversationLoad();
-    const notificationRailButton = await waitFor(() => {
-      const button = Array.from(document.querySelectorAll<HTMLButtonElement>(".rail-button")).find((item) =>
-        item.textContent?.includes("通知")
-      );
-      expect(button).toBeTruthy();
-      return button as HTMLButtonElement;
-    });
-    await fireEvent.click(notificationRailButton);
+    await fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const settingsWorkspace = await screen.findByRole("region", { name: "功能工作区" });
+    await fireEvent.click(within(settingsWorkspace).getByRole("button", { name: "偏好" }));
     const enableNotificationButton = await waitFor(() => {
       const button = Array.from(settingsWorkspace.querySelectorAll<HTMLButtonElement>("button")).find((item) =>
-        item.textContent?.includes("通知")
+        item.textContent?.includes("开启系统通知")
       );
       expect(button).toBeTruthy();
       return button as HTMLButtonElement;

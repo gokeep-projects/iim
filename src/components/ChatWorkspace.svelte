@@ -123,8 +123,10 @@
 
   let dragging = false;
   let emojiOpen = false;
+  let quickRepliesOpen = false;
   let moreToolsOpen = false;
   let textareaElement: HTMLTextAreaElement | null = null;
+  let messageListElement: HTMLDivElement | null = null;
   let conversationSearchInputElement: HTMLInputElement | null = null;
   let conversationSearchDateElement: HTMLInputElement | null = null;
   let composerMenuElement: HTMLDivElement | null = null;
@@ -149,6 +151,7 @@
     "giu"
   );
   const contextMenuInset = 8;
+  const hiddenComposerWarnings = new Set(["请先选择一个已发现的联系人", "请先选择一个会话或联系人"]);
 
   $: conversationActionsDisabled = Boolean(conversationActionsDisabledReason);
 
@@ -285,6 +288,8 @@
   function sendQuickReply(reply: string) {
     if (sendDisabledReason) return;
     void onSend(reply);
+    quickRepliesOpen = false;
+    closeMentionPanel();
   }
 
   function openComposerMenu(event: MouseEvent) {
@@ -383,6 +388,7 @@
   function closeComposerOverlays() {
     composerMenu = null;
     emojiOpen = false;
+    quickRepliesOpen = false;
     moreToolsOpen = false;
     closeMentionPanel();
   }
@@ -439,6 +445,26 @@
 
   function formatTime(value: number) {
     return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  }
+
+  function conversationPreviewText() {
+    const draftPreview = conversation?.draft_preview?.trim();
+    if (draftPreview) return `草稿：${draftPreview}`;
+    const messagePreview = conversation?.last_message_preview?.trim();
+    if (messagePreview) return messagePreview;
+    if (!conversation) return "从左侧选择会话或联系人";
+    return isGroup ? "群聊已就绪，可以继续本机 fanout 直连沟通。" : "直连通道已就绪，等待第一条消息。";
+  }
+
+  function conversationMetaText() {
+    if (isGroup) return `${memberCount} 位成员 · 本机 fanout`;
+    return activePeer?.endpoints[0] ?? activePeer?.hostname ?? "等待局域网发现";
+  }
+
+  function conversationTimeText() {
+    const lastMessageAt = conversation?.last_message_at ?? 0;
+    if (!lastMessageAt) return conversation?.unread_count ? `${conversation.unread_count} 条未读` : "尚无历史消息";
+    return `${formatDateDivider(lastMessageAt)} ${formatTime(lastMessageAt)}`;
   }
 
   function dayKey(value: number) {
@@ -773,11 +799,34 @@
     }, 0);
   }
 
+  function scrollMessageListToEnd() {
+    if (!messageListElement || messages.length === 0) return;
+    window.setTimeout(() => {
+      const list = messageListElement;
+      if (!list) return;
+      if (typeof list.scrollTo === "function") {
+        list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
+      } else {
+        list.scrollTop = list.scrollHeight;
+      }
+    }, 0);
+  }
+
+  function shouldShowComposerWarning(value: string) {
+    const warning = value.trim();
+    return Boolean(warning) && !hiddenComposerWarnings.has(warning);
+  }
+
   $: peerAvailabilityLabel = activePeer?.status === "online" ? "可联系" : "暂不可达";
   $: peerPresenceAriaLabel = `${title} ${peerAvailabilityLabel}`;
   $: headerScopeLabel = isGroup ? "群聊 · 无服务器 fanout" : "直连会话 · 无中间服务器";
   $: composerScopeLabel = isGroup ? `群聊 · ${memberCount} 位成员` : "直连会话";
-  $: composerWarnings = Array.from(new Set([sendDisabledReason, fileActionsDisabledReason].filter(Boolean)));
+  $: emptyConversationPreview = conversationPreviewText();
+  $: emptyConversationMeta = conversationMetaText();
+  $: emptyConversationTime = conversationTimeText();
+  $: latestMessageScrollKey = `${messages.length}:${messages[messages.length - 1]?.id ?? ""}`;
+  $: if (latestMessageScrollKey) scrollMessageListToEnd();
+  $: composerWarnings = Array.from(new Set([sendDisabledReason, fileActionsDisabledReason].filter(shouldShowComposerWarning)));
   $: pendingFileCountLabel = pendingFileDrafts.length === 1 ? "1 个文件" : `${pendingFileDrafts.length} 个文件`;
   $: transferTaskById = new Map(transferTasks.map((task) => [task.id, task]));
   $: focusedSearchResultIndex = conversationSearchResults.findIndex((result) => result.id === focusedMessageId);
@@ -968,7 +1017,7 @@
     <div class="typing-indicator" role="status">{typingText}</div>
   {/if}
 
-  <div class="message-list" aria-live="polite">
+  <div bind:this={messageListElement} class="message-list" aria-live="polite">
     {#if messageSelectionMode}
       <section class="bulk-message-bar" aria-label="消息多选工具栏">
         <div>
@@ -1224,11 +1273,42 @@
         </article>
       </div>
     {:else}
-      <div class="empty-chat">
-        <ShieldCheck size={28} />
-        <strong>选择会话后开始内网直连聊天</strong>
-        <span>消息会先写入本地 outbox，等待 ACK 后更新状态。</span>
-      </div>
+      {#if conversation}
+        <section class="empty-chat conversation-overview-empty" aria-label="会话概览">
+          <div class="empty-chat-icon">
+            {#if isGroup}<Users size={26} />{:else}<ShieldCheck size={26} />{/if}
+          </div>
+          <div class="empty-chat-copy">
+            <span class="eyebrow">{headerScopeLabel}</span>
+            <strong>{conversation.title || title}</strong>
+            <span>{emptyConversationMeta}</span>
+          </div>
+          <article class="latest-message-frame" aria-label="最近消息预览">
+            <div>
+              <FileText size={16} />
+              <span>{conversation.draft_preview ? "未发送草稿" : "最近消息"}</span>
+            </div>
+            <p>{emptyConversationPreview}</p>
+            <small>{emptyConversationTime}</small>
+          </article>
+          <div class="empty-chat-actions" role="group" aria-label="会话快捷操作">
+            <button type="button" on:click={showDetails}>
+              <Info size={14} />
+              详情
+            </button>
+            <button type="button" on:click={onShowTransfers}>
+              <UploadCloud size={14} />
+              传输
+            </button>
+          </div>
+        </section>
+      {:else}
+        <div class="empty-chat">
+          <ShieldCheck size={28} />
+          <strong>选择左侧会话</strong>
+          <span>在线联系人出现后可直接开始聊天。</span>
+        </div>
+      {/if}
     {/each}
   </div>
 
@@ -1361,15 +1441,6 @@
       {/each}
     </div>
 
-    <div class="quick-row">
-      {#each quickReplies as reply}
-        <button class="quick-reply-chip" type="button" title={sendDisabledReason || reply} disabled={Boolean(sendDisabledReason)} on:click={() => sendQuickReply(reply)}>
-          <Send size={12} />
-          {reply}
-        </button>
-      {/each}
-    </div>
-
     <div class="composer-tools" role="toolbar" aria-label="消息工具栏">
       <div class="toolbar-group" role="group" aria-label="附件工具">
         <button
@@ -1399,12 +1470,36 @@
           title="插入表情"
           on:click={(event) => {
             event.stopPropagation();
+            quickRepliesOpen = false;
+            moreToolsOpen = false;
             emojiOpen = !emojiOpen;
           }}
         >
           <Smile size={15} />
           <span class="composer-tool-label">表情</span>
         </button>
+        {#if quickReplies.length > 0}
+          <button
+            class:active={quickRepliesOpen}
+            class="tool-button composer-tool-button"
+            type="button"
+            title="快捷回复"
+            on:mouseenter={() => {
+              emojiOpen = false;
+              moreToolsOpen = false;
+              quickRepliesOpen = true;
+            }}
+            on:click={(event) => {
+              event.stopPropagation();
+              emojiOpen = false;
+              moreToolsOpen = false;
+              quickRepliesOpen = !quickRepliesOpen;
+            }}
+          >
+            <Send size={15} />
+            <span class="composer-tool-label">快捷回复</span>
+          </button>
+        {/if}
         <button
           class:active={moreToolsOpen}
           class="tool-button composer-tool-button"
@@ -1412,6 +1507,8 @@
           title="更多工具"
           on:click={(event) => {
             event.stopPropagation();
+            emojiOpen = false;
+            quickRepliesOpen = false;
             moreToolsOpen = !moreToolsOpen;
           }}
         >
@@ -1531,6 +1628,24 @@
         拖拽或粘贴文件/图片到输入区
       </span>
     </div>
+
+    {#if quickRepliesOpen && quickReplies.length > 0}
+      <div class="quick-reply-menu" role="menu" aria-label="快捷回复" tabindex="-1" on:mouseenter={() => (quickRepliesOpen = true)}>
+        {#each quickReplies as reply}
+          <button
+            class="quick-reply-option"
+            type="button"
+            role="menuitem"
+            title={sendDisabledReason || reply}
+            disabled={Boolean(sendDisabledReason)}
+            on:click={() => sendQuickReply(reply)}
+          >
+            <Send size={12} />
+            {reply}
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     {#if emojiOpen}
       <div class="emoji-panel" role="menu" aria-label="表情选择器">

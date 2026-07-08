@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/svelte";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import ConversationList from "./ConversationList.svelte";
 import type { ContactMetadata, ConversationSummary, PeerProfile } from "../api";
 
@@ -32,6 +32,10 @@ const conversations = [
   conversation("direct:active", "Active Chat"),
   conversation("direct:archived", "Archived Chat", { archived: true }),
 ];
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function peer(peerId: string, displayName: string): PeerProfile {
   return {
@@ -119,13 +123,10 @@ describe("ConversationList filters", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("keeps row shortcut actions accessible without competing with the main conversation button", () => {
+  it("keeps row management actions out of the visible conversation row", () => {
     render(ConversationList, {
       props: {
         conversations: [conversation("direct:active", "Active Chat")],
-        filter: "active",
-        onQueryChange: vi.fn(),
-        onFilterChange: vi.fn(),
       },
     });
 
@@ -134,28 +135,77 @@ describe("ConversationList filters", () => {
     const actions = item?.querySelector(".conversation-actions");
 
     expect(mainButton).toHaveClass("conversation-main-button");
-    expect(actions).not.toHaveAttribute("aria-hidden");
-    expect(within(actions as HTMLElement).getByRole("button", { name: "置顶" })).toBeInTheDocument();
-    expect(within(actions as HTMLElement).getByRole("button", { name: "免打扰" })).toBeInTheDocument();
-    expect(within(actions as HTMLElement).getByRole("button", { name: "归档" })).toBeInTheDocument();
-    expect(within(actions as HTMLElement).getByRole("button", { name: "删除会话" })).toBeInTheDocument();
+    expect(actions).toBeNull();
   });
 
-  it("keeps row shortcut actions reachable by keyboard focus", () => {
+  it("keeps conversation row management available through the context callback", async () => {
+    const openContext = vi.fn();
     render(ConversationList, {
       props: {
         conversations: [conversation("direct:active", "Active Chat")],
-        filter: "active",
-        onQueryChange: vi.fn(),
-        onFilterChange: vi.fn(),
+        onConversationContext: openContext,
       },
     });
 
-    const actions = screen.getAllByRole("button", { name: /置顶|免打扰|归档|删除会话/ }).slice(0, 4);
-    expect(actions).toHaveLength(4);
-    for (const action of actions) {
-      expect(action).not.toHaveAttribute("tabindex", "-1");
-    }
+    await fireEvent.contextMenu(screen.getByRole("button", { name: /Active Chat/ }));
+
+    expect(openContext).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "direct:active" }),
+      expect.any(MouseEvent),
+    );
+  });
+
+  it("keeps the refresh button busy and spinning for at least one second", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn(() => Promise.resolve());
+    render(ConversationList, {
+      props: {
+        conversations: [],
+        onRefreshPeers: refresh,
+      },
+    });
+
+    const button = screen.getByRole("button", { name: "刷新联系人" });
+    await fireEvent.click(button);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveClass("refreshing");
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(button).toHaveAttribute("aria-busy", "true");
+
+    await vi.advanceTimersByTimeAsync(1);
+    await waitFor(() => expect(button).toHaveAttribute("aria-busy", "false"));
+    expect(button).not.toHaveClass("refreshing");
+  });
+
+  it("keeps the sidebar free of a global search box", () => {
+    render(ConversationList, {
+      props: {
+        conversations,
+      },
+    });
+
+    expect(screen.queryByPlaceholderText("搜索会话、联系人、聊天记录")).not.toBeInTheDocument();
+    expect(screen.queryByRole("listbox", { name: "搜索建议" })).not.toBeInTheDocument();
+  });
+
+  it("keeps conversation row management behind the context menu instead of hover action buttons", () => {
+    render(ConversationList, {
+      props: {
+        conversations: [
+          conversation("direct:peer-a", "Alice Chat", {
+            pinned: true,
+            muted: true,
+          }),
+        ],
+      },
+    });
+
+    expect(screen.queryByRole("button", { name: "置顶" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消置顶" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除会话" })).not.toBeInTheDocument();
   });
 
   it("keeps muted conversations in the single conversation list without filter tabs", async () => {
