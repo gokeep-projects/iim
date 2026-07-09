@@ -1223,6 +1223,16 @@ pub fn spawn_background_discovery(app: AppHandle) {
                                         );
                                         continue;
                                     }
+                                    if !known_group_member_can_send(&state, &message) {
+                                        let _ = app.emit(
+                                            "network:warning",
+                                            format!(
+                                                "Group message sender rejected from {}",
+                                                message.sender_id
+                                            ),
+                                        );
+                                        continue;
+                                    }
                                     let inserted = state
                                         .store()
                                         .insert_incoming_once(&message)
@@ -1800,6 +1810,16 @@ async fn handle_quic_frame(app: &AppHandle, received: crate::transport::Received
                     );
                     return;
                 }
+                if !known_group_member_can_send(&state, &message) {
+                    let _ = app.emit(
+                        "network:warning",
+                        format!(
+                            "QUIC group message sender rejected from {}",
+                            message.sender_id
+                        ),
+                    );
+                    return;
+                }
 
                 let inserted = state
                     .store()
@@ -2219,12 +2239,26 @@ fn process_group_invite_frame(
         );
         return;
     }
+    if let Ok(Some(owner_peer_id)) = state.store().group_owner_peer_id(&invite.conversation_id) {
+        let owner_peer_id = owner_peer_id.trim();
+        if !owner_peer_id.is_empty() && owner_peer_id != invite.sender_id.trim() {
+            let _ = app.emit(
+                "network:warning",
+                format!(
+                    "{warning_label} owner rejected from {} for {}",
+                    invite.sender_id, invite.conversation_id
+                ),
+            );
+            return;
+        }
+    }
     if state
         .store()
         .upsert_group_conversation(
             &invite.conversation_id,
             &invite.name,
             &invite.announcement,
+            &invite.sender_id,
             &invite.member_peer_ids,
         )
         .is_ok()
@@ -2395,6 +2429,20 @@ pub fn conversation_id_targets_sender_and_peer(
     let includes_local = peers.iter().any(|peer_id| *peer_id == local_peer_id);
     let includes_sender = peers.iter().any(|peer_id| *peer_id == sender_id);
     (peers.len() == 1 && includes_local) || (peers.len() == 2 && includes_local && includes_sender)
+}
+
+fn known_group_member_can_send(state: &AppState, message: &ChatBody) -> bool {
+    if !message.conversation_id.trim().starts_with("group:") {
+        return true;
+    }
+    let Ok(Some(_)) = state.store().group_owner_peer_id(&message.conversation_id) else {
+        return true;
+    };
+    state
+        .store()
+        .list_group_members(&message.conversation_id)
+        .map(|members| members.iter().any(|peer_id| peer_id == &message.sender_id))
+        .unwrap_or(false)
 }
 
 fn peer_is_blocked(state: &AppState, peer_id: &str) -> bool {

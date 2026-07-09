@@ -29,7 +29,7 @@ use iim::{
     },
     screen_capture::{screen_capture_launch_target, ScreenCaptureLaunchTarget},
     staging::{sanitize_staged_file_name, staged_clipboard_file_path},
-    store::{AppPreferences, EncryptedStore},
+    store::{AppPreferences, AppShortcuts, EncryptedStore},
     store_key::{key_material_to_sqlcipher_hex, load_or_create_store_key, store_key_path},
     transport::{OutboxDeliveryPolicy, QuicTransport},
 };
@@ -2142,6 +2142,7 @@ fn encrypted_store_persists_manual_unread_marker_until_marked_read() {
         .expect("manual unread saved");
     let unread = store.list_conversations().expect("conversations listed");
     assert_eq!(unread[0].unread_count, 1);
+    assert!(unread[0].manual_unread);
 
     store
         .mark_conversation_read("direct:todo:me")
@@ -2151,6 +2152,7 @@ fn encrypted_store_persists_manual_unread_marker_until_marked_read() {
         .expect("summary loaded")
         .expect("summary exists");
     assert_eq!(read.unread_count, 0);
+    assert!(!read.manual_unread);
 }
 
 #[test]
@@ -2233,7 +2235,11 @@ fn encrypted_store_persists_network_settings_and_group_conversations() {
     );
 
     let group_id = store
-        .create_group_conversation("Ops Room", &["peer-a".to_string(), "peer-b".to_string()])
+        .create_group_conversation(
+            "Ops Room",
+            "local-peer",
+            &["peer-a".to_string(), "peer-b".to_string()],
+        )
         .expect("group conversation saved");
     let conversations = store.list_conversations().expect("conversations listed");
     assert!(conversations
@@ -2250,6 +2256,7 @@ fn encrypted_store_persists_network_settings_and_group_conversations() {
             &group_id,
             "Ops Room Renamed",
             "Release notes pinned for every member",
+            "local-peer",
             &["peer-a".to_string(), "peer-c".to_string()],
         )
         .expect("group conversation updated");
@@ -2258,6 +2265,7 @@ fn encrypted_store_persists_network_settings_and_group_conversations() {
         .expect("summary loaded")
         .expect("summary exists");
     assert_eq!(summary.title, "Ops Room Renamed");
+    assert_eq!(summary.group_owner_peer_id, "local-peer");
     assert_eq!(
         summary.group_announcement,
         "Release notes pinned for every member"
@@ -2283,9 +2291,15 @@ fn encrypted_store_persists_app_preferences() {
     let preferences = AppPreferences {
         dark_mode: true,
         send_shortcut: "ctrl_enter".to_string(),
+        shortcuts: AppShortcuts {
+            send_message: "ctrl_enter".to_string(),
+            screenshot: "ctrl_shift_a".to_string(),
+            toggle_window: "ctrl_shift_i".to_string(),
+        },
         show_notification_preview: false,
         privacy_mode: false,
         close_to_tray: false,
+        ..AppPreferences::default()
     };
     store
         .save_app_preferences(&preferences)

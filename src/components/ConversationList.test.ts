@@ -7,7 +7,7 @@ import {
 } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ConversationList from "./ConversationList.svelte";
-import type { ContactMetadata, ConversationSummary, PeerProfile } from "../api";
+import type { ChatMessage, ContactMetadata, ConversationSummary, PeerProfile } from "../api";
 
 function conversation(
   id: string,
@@ -20,6 +20,7 @@ function conversation(
     last_message_at: 1_700_000_000_000,
     last_message_preview: "",
     unread_count: 0,
+    manual_unread: false,
     pinned: false,
     muted: false,
     archived: false,
@@ -45,6 +46,27 @@ function peer(peerId: string, displayName: string): PeerProfile {
     status: "online",
     endpoints: [`${peerId}:24251`],
     fingerprint: `${peerId}-fingerprint`,
+  };
+}
+
+function chatMessage(
+  id: string,
+  conversationId: string,
+  body: string,
+  patch: Partial<ChatMessage> = {},
+): ChatMessage {
+  return {
+    id,
+    conversation_id: conversationId,
+    sender_id: "peer-a",
+    body,
+    attachments: [],
+    created_at: 1_700_000_001_000,
+    status: "received",
+    recalled: false,
+    favorited: false,
+    reactions: [],
+    ...patch,
   };
 }
 
@@ -180,14 +202,14 @@ describe("ConversationList filters", () => {
     expect(button).not.toHaveClass("refreshing");
   });
 
-  it("keeps the sidebar free of a global search box", () => {
+  it("shows a compact global search box for conversations, contacts, and records", () => {
     render(ConversationList, {
       props: {
         conversations,
       },
     });
 
-    expect(screen.queryByPlaceholderText("搜索会话、联系人、聊天记录")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("搜索联系人、会话、聊天记录")).toBeInTheDocument();
     expect(screen.queryByRole("listbox", { name: "搜索建议" })).not.toBeInTheDocument();
   });
 
@@ -299,6 +321,25 @@ describe("ConversationList filters", () => {
     expect(screen.queryByRole("tab", { name: /未读/ })).not.toBeInTheDocument();
   });
 
+  it("distinguishes manual unread markers from ordinary unread counts", () => {
+    render(ConversationList, {
+      props: {
+        conversations: [
+          conversation("direct:manual", "Manual Chat", {
+            unread_count: 1,
+            manual_unread: true,
+          }),
+        ],
+      },
+    });
+
+	    const mainButton = screen.getByRole("button", { name: /Manual Chat/ });
+	    expect(mainButton.closest(".conversation-item")).toHaveClass("manual-unread");
+	    expect(within(mainButton).queryByText("未读标记")).not.toBeInTheDocument();
+	    expect(within(mainButton).getByTitle("手动标为未读")).toHaveClass("manual");
+	    expect(screen.getByLabelText("Manual Chat 已标为未读")).toHaveClass("manual");
+	  });
+
   it("marks conversations that mentioned the local user", () => {
     render(ConversationList, {
       props: {
@@ -307,8 +348,9 @@ describe("ConversationList filters", () => {
       },
     });
 
-    const item = screen.getByRole("button", { name: /Ops/ });
-    expect(within(item).getByText("@我")).toHaveClass("mention-flag");
+	    const item = screen.getByRole("button", { name: /Ops/ });
+	    expect(within(item).queryByText("@我")).not.toBeInTheDocument();
+	    expect(within(item).getByTitle("@我")).toHaveClass("mention");
   });
 
   it("marks mentioned conversations without exposing a mention filter tab", async () => {
@@ -336,9 +378,11 @@ describe("ConversationList filters", () => {
     expect(
       screen.queryByRole("button", { name: /Archived/ }),
     ).not.toBeInTheDocument();
-    expect(within(screen.getByRole("button", { name: /Ops/ })).getByText("@我")).toHaveClass("mention-flag");
-    expect(screen.queryByRole("tab", { name: /@我 1/ })).not.toBeInTheDocument();
-    expect(changeFilter).not.toHaveBeenCalled();
+	    const ops = screen.getByRole("button", { name: /Ops/ });
+	    expect(within(ops).queryByText("@我")).not.toBeInTheDocument();
+	    expect(within(ops).getByTitle("@我")).toHaveClass("mention");
+	    expect(screen.queryByRole("tab", { name: /@我 1/ })).not.toBeInTheDocument();
+	    expect(changeFilter).not.toHaveBeenCalled();
   });
 
   it("marks todo conversations and keeps them in the single sorted list", async () => {
@@ -361,17 +405,18 @@ describe("ConversationList filters", () => {
       },
     });
 
-    const item = screen.getByRole("button", { name: /Todo Chat/ });
-    expect(item).toBeInTheDocument();
+	    const item = screen.getByRole("button", { name: /Todo Chat/ });
+	    expect(item).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Quiet Chat/ }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /Archived Todo/ }),
     ).not.toBeInTheDocument();
-    expect(within(item).getByText("待办 2")).toHaveClass("todo-flag");
-    expect(screen.queryByRole("tab", { name: /待办 1/ })).not.toBeInTheDocument();
-    expect(changeFilter).not.toHaveBeenCalled();
+	    expect(within(item).queryByText("待办 2")).not.toBeInTheDocument();
+	    expect(within(item).getByTitle("2 个待办")).toHaveClass("todo");
+	    expect(screen.queryByRole("tab", { name: /待办 1/ })).not.toBeInTheDocument();
+	    expect(changeFilter).not.toHaveBeenCalled();
   });
 
   it("marks outbox conversations and keeps them in the single sorted list", async () => {
@@ -405,8 +450,10 @@ describe("ConversationList filters", () => {
     expect(queued).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Quiet Chat/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Archived Outbox/ })).not.toBeInTheDocument();
-    expect(within(failed).getByText("失败 2")).toHaveClass("failed");
-    expect(within(queued).getByText("待发 1")).toHaveClass("outbox-flag");
+	    expect(within(failed).queryByText("失败 2")).not.toBeInTheDocument();
+	    expect(within(queued).queryByText("待发 1")).not.toBeInTheDocument();
+	    expect(within(failed).getByTitle("2 条发送失败")).toHaveClass("failed");
+	    expect(within(queued).getByTitle("1 条待发送")).toHaveClass("outbox");
     expect(screen.queryByRole("tab", { name: /待发 2/ })).not.toBeInTheDocument();
     expect(changeFilter).not.toHaveBeenCalled();
   });
@@ -556,7 +603,7 @@ describe("ConversationList filters", () => {
     ).toBeInTheDocument();
   });
 
-  it("filters the sidebar contact directory by reachable, favorite, and unavailable peers", async () => {
+  it("keeps contact discovery free of duplicate status filter tabs", async () => {
     render(ConversationList, {
       props: {
         conversations: [conversation("direct:active", "Active Chat")],
@@ -565,32 +612,79 @@ describe("ConversationList filters", () => {
           peer("peer-b", "Bob"),
           { ...peer("peer-c", "Carol"), status: "offline" },
         ],
-        contactMetadata: {
-          "peer-b": metadata("peer-b", "Bob", { favorite: true }),
-        },
       },
     });
 
-    await fireEvent.click(screen.getByRole("tab", { name: /联系人 3 人/ }));
-    const filterTabs = screen.getByRole("tablist", { name: "联系人筛选" });
-    const contactList = screen.getByRole("list", { name: "联系人列表" });
+    await fireEvent.click(screen.getAllByRole("tab")[1]);
+    const contactList = screen.getByRole("list");
 
-    expect(within(filterTabs).getByRole("tab", { name: "全部 3" })).toHaveAttribute("aria-selected", "true");
-
-    await fireEvent.click(within(filterTabs).getByRole("tab", { name: "可联系 2" }));
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
     expect(within(contactList).getByText("Alice")).toBeInTheDocument();
     expect(within(contactList).getByText("Bob")).toBeInTheDocument();
-    expect(within(contactList).queryByText("Carol")).not.toBeInTheDocument();
-
-    await fireEvent.click(within(filterTabs).getByRole("tab", { name: "收藏 1" }));
-    expect(within(contactList).queryByText("Alice")).not.toBeInTheDocument();
-    expect(within(contactList).getByText("Bob")).toBeInTheDocument();
-    expect(within(contactList).queryByText("Carol")).not.toBeInTheDocument();
-
-    await fireEvent.click(within(filterTabs).getByRole("tab", { name: "暂不可达 1" }));
-    expect(within(contactList).queryByText("Alice")).not.toBeInTheDocument();
-    expect(within(contactList).queryByText("Bob")).not.toBeInTheDocument();
     expect(within(contactList).getByText("Carol")).toBeInTheDocument();
+  });
+
+  it("marks pinned conversations with row styling instead of visible pinned text", () => {
+    render(ConversationList, {
+      props: {
+        conversations: [
+          conversation("direct:peer-a", "Alice Chat", {
+            pinned: true,
+          }),
+        ],
+      },
+    });
+
+    const mainButton = screen.getByRole("button", { name: /Alice Chat/ });
+    expect(mainButton.closest(".conversation-item")).toHaveClass("pinned");
+    expect(within(mainButton).queryByText("置顶")).not.toBeInTheDocument();
+  });
+
+  it("searches conversations, contacts, and chat records with keyboard selection", async () => {
+    const selectConversation = vi.fn();
+    const openMessageResult = vi.fn();
+    const searchMessages = vi.fn(async () => [
+      chatMessage("msg-ops", "direct:ops", "ops release checklist"),
+    ]);
+    render(ConversationList, {
+      props: {
+        conversations: [
+          conversation("direct:ops", "Ops Room", {
+            last_message_preview: "ops deploy window",
+          }),
+        ],
+        peers: [
+          {
+            ...peer("ops", "Ops Device"),
+            hostname: "ops-host.local",
+            endpoints: ["10.0.0.8:24251"],
+          },
+        ],
+        onSelectConversation: selectConversation,
+        onOpenMessageResult: openMessageResult,
+        onSearchMessages: searchMessages,
+      },
+    });
+
+    const input = screen.getByPlaceholderText("搜索联系人、会话、聊天记录");
+    await fireEvent.input(input, { target: { value: "ops" } });
+
+    const suggestions = await screen.findByRole("listbox", { name: "搜索建议" });
+    expect(within(suggestions).getByText("会话")).toBeInTheDocument();
+    expect(within(suggestions).getByText("联系人")).toBeInTheDocument();
+    await waitFor(() => expect(within(suggestions).getByText("记录")).toBeInTheDocument());
+    expect(within(suggestions).getByText("10.0.0.8:24251")).toBeInTheDocument();
+    expect(searchMessages).toHaveBeenCalledWith("ops");
+
+    await fireEvent.keyDown(input, { key: "ArrowDown" });
+    await fireEvent.keyDown(input, { key: "ArrowDown" });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(openMessageResult).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "msg-ops" }),
+    );
+    expect(selectConversation).not.toHaveBeenCalled();
   });
 
   it("groups sidebar contacts by saved contact group", async () => {

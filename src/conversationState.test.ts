@@ -19,6 +19,7 @@ function conversation(id: string, unreadCount: number, patch: Partial<Conversati
     last_message_at: unreadCount,
     last_message_preview: "",
     unread_count: unreadCount,
+    manual_unread: false,
     pinned: false,
     muted: false,
     archived: false,
@@ -71,7 +72,7 @@ describe("conversationState", () => {
     const conversations = [conversation("direct:a", 3), conversation("direct:b", 1)];
 
     expect(markConversationReadInList(conversations, "direct:a")).toEqual([
-      { ...conversations[0], unread_count: 0 },
+      { ...conversations[0], unread_count: 0, manual_unread: false },
       conversations[1]
     ]);
   });
@@ -86,7 +87,7 @@ describe("conversationState", () => {
     const conversations = [conversation("direct:a", 0), conversation("direct:b", 2)];
 
     expect(markConversationUnreadInList(conversations, "direct:a")).toEqual([
-      { ...conversations[0], unread_count: 1 },
+      { ...conversations[0], unread_count: 1, manual_unread: true },
       conversations[1]
     ]);
   });
@@ -95,9 +96,17 @@ describe("conversationState", () => {
     const conversations = [conversation("direct:a", 3), conversation("direct:b", 0), conversation("group:c", 2)];
 
     expect(markAllConversationsReadInList(conversations)).toEqual([
-      { ...conversations[0], unread_count: 0 },
+      { ...conversations[0], unread_count: 0, manual_unread: false },
       conversations[1],
-      { ...conversations[2], unread_count: 0 }
+      { ...conversations[2], unread_count: 0, manual_unread: false }
+    ]);
+  });
+
+  it("clears a manual unread marker even when the unread count is already zero", () => {
+    const conversations = [conversation("direct:a", 0, { manual_unread: true })];
+
+    expect(markAllConversationsReadInList(conversations)).toEqual([
+      { ...conversations[0], unread_count: 0, manual_unread: false }
     ]);
   });
 

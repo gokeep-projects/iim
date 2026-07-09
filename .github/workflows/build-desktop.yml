@@ -7,23 +7,85 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend tests
+        run: npm test -- --pool=threads --maxWorkers=1 --minWorkers=1
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
+
   build:
-    name: ${{ matrix.name }}
+    name: Build ${{ matrix.label }}
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Windows
+          - label: Windows
             os: windows-latest
-            artifact_glob: src-tauri/target/release/bundle/**/*
-          - name: Linux
+            bundles: msi,nsis
+            artifact_name: iim-windows-${{ github.sha }}
+            artifact_paths: |
+              src-tauri/target/release/bundle/msi/**/*
+              src-tauri/target/release/bundle/nsis/**/*
+          - label: Linux
             os: ubuntu-22.04
-            artifact_glob: src-tauri/target/release/bundle/**/*
-          - name: macOS
+            bundles: deb,appimage
+            artifact_name: iim-linux-${{ github.sha }}
+            artifact_paths: |
+              src-tauri/target/release/bundle/deb/**/*
+              src-tauri/target/release/bundle/appimage/**/*
+          - label: macOS
             os: macos-latest
-            artifact_glob: src-tauri/target/release/bundle/**/*
+            bundles: dmg,app
+            artifact_name: iim-macos-${{ github.sha }}
+            artifact_paths: |
+              src-tauri/target/release/bundle/dmg/**/*
+              src-tauri/target/release/bundle/macos/**/*
 
     steps:
       - name: Checkout
@@ -56,15 +118,12 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Run frontend tests
-        run: npm test -- --run src/components/ConversationList.test.ts src/App.test.ts --pool=threads --maxWorkers=1 --minWorkers=1
-
-      - name: Build Tauri client
-        run: npm run tauri -- build
+      - name: Build desktop bundle
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }}
 
       - name: Upload desktop bundle
         uses: actions/upload-artifact@v4
         with:
-          name: iim-${{ runner.os }}-${{ github.sha }}
-          path: ${{ matrix.artifact_glob }}
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_paths }}
           if-no-files-found: error

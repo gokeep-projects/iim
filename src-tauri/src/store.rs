@@ -41,6 +41,7 @@ pub struct MessageDeliveryReceipt {
 pub struct AppPreferences {
     pub dark_mode: bool,
     pub send_shortcut: String,
+    pub shortcuts: AppShortcuts,
     pub show_notification_preview: bool,
     pub privacy_mode: bool,
     pub close_to_tray: bool,
@@ -51,11 +52,51 @@ pub struct AppPreferences {
     pub require_contact_for_messaging: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AppShortcuts {
+    pub send_message: String,
+    pub screenshot: String,
+    pub toggle_window: String,
+}
+
+impl Default for AppShortcuts {
+    fn default() -> Self {
+        Self {
+            send_message: "enter".to_string(),
+            screenshot: "ctrl_alt_a".to_string(),
+            toggle_window: "ctrl_alt_i".to_string(),
+        }
+    }
+}
+
+impl AppShortcuts {
+    fn normalized(mut self) -> Self {
+        if self.send_message != "enter" && self.send_message != "ctrl_enter" {
+            self.send_message = "enter".to_string();
+        }
+        if self.screenshot != "ctrl_alt_a"
+            && self.screenshot != "ctrl_shift_a"
+            && self.screenshot != "none"
+        {
+            self.screenshot = "ctrl_alt_a".to_string();
+        }
+        if self.toggle_window != "ctrl_alt_i"
+            && self.toggle_window != "ctrl_shift_i"
+            && self.toggle_window != "none"
+        {
+            self.toggle_window = "ctrl_alt_i".to_string();
+        }
+        self
+    }
+}
+
 impl Default for AppPreferences {
     fn default() -> Self {
         Self {
             dark_mode: false,
             send_shortcut: "enter".to_string(),
+            shortcuts: AppShortcuts::default(),
             show_notification_preview: true,
             privacy_mode: false,
             close_to_tray: true,
@@ -73,6 +114,8 @@ impl AppPreferences {
         if self.send_shortcut != "enter" && self.send_shortcut != "ctrl_enter" {
             self.send_shortcut = "enter".to_string();
         }
+        self.shortcuts = self.shortcuts.normalized();
+        self.shortcuts.send_message = self.send_shortcut.clone();
         if self.privacy_mode {
             self.show_notification_preview = false;
         }
@@ -680,10 +723,11 @@ impl EncryptedStore {
     pub fn create_group_conversation(
         &self,
         name: &str,
+        owner_peer_id: &str,
         member_peer_ids: &[String],
     ) -> anyhow::Result<String> {
         let conversation_id = format!("group:{}", Uuid::new_v4());
-        self.upsert_group_conversation(&conversation_id, name, "", member_peer_ids)?;
+        self.upsert_group_conversation(&conversation_id, name, "", owner_peer_id, member_peer_ids)?;
         Ok(conversation_id)
     }
 
@@ -692,11 +736,14 @@ impl EncryptedStore {
         conversation_id: &str,
         name: &str,
         announcement: &str,
+        owner_peer_id: &str,
         member_peer_ids: &[String],
     ) -> anyhow::Result<()> {
         let title = name.trim();
         let announcement = announcement.trim();
+        let owner_peer_id = owner_peer_id.trim();
         anyhow::ensure!(!title.is_empty(), "group name cannot be empty");
+        anyhow::ensure!(!owner_peer_id.is_empty(), "group owner cannot be empty");
         anyhow::ensure!(
             conversation_id.starts_with("group:"),
             "group conversation id must start with group:"
@@ -719,13 +766,18 @@ impl EncryptedStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            "INSERT OR IGNORE INTO group_conversations (id, title, announcement, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![conversation_id, title, announcement, now, now],
+            "INSERT OR IGNORE INTO group_conversations (id, title, announcement, owner_peer_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![conversation_id, title, announcement, owner_peer_id, now, now],
         )?;
         transaction.execute(
-            "UPDATE group_conversations SET title = ?1, announcement = ?2, updated_at = ?3 WHERE id = ?4",
-            params![title, announcement, now, conversation_id],
+            "UPDATE group_conversations
+             SET title = ?1,
+                 announcement = ?2,
+                 owner_peer_id = CASE WHEN owner_peer_id = '' THEN ?3 ELSE owner_peer_id END,
+                 updated_at = ?4
+             WHERE id = ?5",
+            params![title, announcement, owner_peer_id, now, conversation_id],
         )?;
         transaction.execute(
             "DELETE FROM group_members WHERE conversation_id = ?1",
@@ -753,13 +805,25 @@ impl EncryptedStore {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn group_owner_peer_id(&self, conversation_id: &str) -> anyhow::Result<Option<String>> {
+        let connection = self.connection()?;
+        connection
+            .query_row(
+                "SELECT owner_peer_id FROM group_conversations WHERE id = ?1",
+                params![conversation_id.trim()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn list_conversations(&self) -> anyhow::Result<Vec<ConversationSummary>> {
         let connection = self.connection()?;
         let mut conversations = Vec::new();
         let preferences = load_conversation_preferences(&connection)?;
 
         let mut group_statement = connection.prepare(
-            "SELECT id, title, announcement, updated_at FROM group_conversations
+            "SELECT id, title, announcement, owner_peer_id, updated_at FROM group_conversations
              ORDER BY updated_at DESC",
         )?;
         let group_rows = group_statement.query_map([], |row| {
@@ -767,9 +831,11 @@ impl EncryptedStore {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 group_announcement: row.get(2)?,
-                last_message_at: row.get(3)?,
+                group_owner_peer_id: row.get(3)?,
+                last_message_at: row.get(4)?,
                 last_message_preview: String::new(),
                 unread_count: 0,
+                manual_unread: false,
                 pinned: false,
                 muted: false,
                 archived: false,
@@ -846,6 +912,7 @@ impl EncryptedStore {
                 ),
                 id: conversation_id,
                 group_announcement: String::new(),
+                group_owner_peer_id: String::new(),
                 last_message_at: row.get(1)?,
                 last_message_preview: message_preview(
                     &latest_body,
@@ -853,6 +920,7 @@ impl EncryptedStore {
                     latest_recalled,
                 ),
                 unread_count: row.get::<_, i64>(2)? as u32,
+                manual_unread: false,
                 pinned: false,
                 muted: false,
                 archived: false,
@@ -890,9 +958,11 @@ impl EncryptedStore {
                     id: draft.conversation_id,
                     title: String::new(),
                     group_announcement: String::new(),
+                    group_owner_peer_id: String::new(),
                     last_message_at: draft.updated_at,
                     last_message_preview: String::new(),
                     unread_count: 0,
+                    manual_unread: false,
                     pinned: false,
                     muted: false,
                     archived: false,
@@ -907,6 +977,7 @@ impl EncryptedStore {
                 conversation.muted = preference.muted;
                 conversation.archived = preference.archived;
                 if preference.manual_unread {
+                    conversation.manual_unread = true;
                     conversation.unread_count = conversation.unread_count.max(1);
                 }
             }
@@ -2268,6 +2339,7 @@ impl EncryptedStore {
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 announcement TEXT NOT NULL DEFAULT '',
+                owner_peer_id TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
@@ -2401,6 +2473,12 @@ impl EncryptedStore {
             "announcement",
             "TEXT NOT NULL DEFAULT ''",
         )?;
+        ensure_column(
+            &connection,
+            "group_conversations",
+            "owner_peer_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )?;
         Ok(())
     }
 }
@@ -2410,9 +2488,11 @@ pub struct ConversationSummary {
     pub id: String,
     pub title: String,
     pub group_announcement: String,
+    pub group_owner_peer_id: String,
     pub last_message_at: i64,
     pub last_message_preview: String,
     pub unread_count: u32,
+    pub manual_unread: bool,
     pub pinned: bool,
     pub muted: bool,
     pub archived: bool,
@@ -2875,7 +2955,7 @@ pub fn data_dir_config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppPreferences, EncryptedStore};
+    use super::{AppPreferences, AppShortcuts, EncryptedStore};
     use crate::protocol::{
         ChatBody, FileEntry, MessageAttachment, MessageStatus, TransferManifest,
     };
@@ -3112,6 +3192,7 @@ mod tests {
                 "group:ops",
                 "值班群",
                 "今天 15:00 发布窗口，所有人提前同步回滚方案。",
+                "local-peer",
                 &members,
             )
             .expect("upsert group");
@@ -3125,6 +3206,7 @@ mod tests {
             summary.group_announcement,
             "今天 15:00 发布窗口，所有人提前同步回滚方案。"
         );
+        assert_eq!(summary.group_owner_peer_id, "local-peer");
     }
 
     #[test]
@@ -3477,6 +3559,10 @@ mod tests {
         assert!(!preferences.login_enabled);
         assert!(preferences.login_password_hash.is_empty());
         assert!(!preferences.require_contact_for_messaging);
+        let normalized = preferences.normalized();
+        assert_eq!(normalized.shortcuts.send_message, "ctrl_enter");
+        assert_eq!(normalized.shortcuts.screenshot, "ctrl_alt_a");
+        assert_eq!(normalized.shortcuts.toggle_window, "ctrl_alt_i");
     }
 
     #[test]
@@ -3484,6 +3570,7 @@ mod tests {
         let preferences = AppPreferences {
             dark_mode: false,
             send_shortcut: "enter".to_string(),
+            shortcuts: AppShortcuts::default(),
             show_notification_preview: true,
             privacy_mode: true,
             close_to_tray: true,

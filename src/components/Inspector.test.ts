@@ -26,6 +26,7 @@ const conversation: ConversationSummary = {
   last_message_at: 1700000000000,
   last_message_preview: "",
   unread_count: 0,
+  manual_unread: false,
   pinned: false,
   muted: false,
   archived: false,
@@ -293,6 +294,79 @@ describe("Inspector tabs", () => {
     await fireEvent.click(within(addableContacts).getByTitle("添加 运维二号"));
 
     expect(toggleMember).toHaveBeenCalledWith("peer-b");
+  });
+
+  it("keeps group member editing read-only for non-creators", async () => {
+    const toggleMember = vi.fn();
+    const saveGroup = vi.fn();
+    render(Inspector, {
+      props: {
+        settings,
+        tab: "members",
+        isGroup: true,
+        selfPeerId: "local",
+        canManageGroup: false,
+        conversation: {
+          id: "group:ops",
+          title: "Ops",
+          group_announcement: "",
+          group_owner_peer_id: "peer-owner",
+          last_message_at: 1,
+          last_message_preview: "",
+          unread_count: 0,
+          manual_unread: false,
+          pinned: false,
+          muted: false,
+          archived: false,
+          draft_preview: "",
+        },
+        groupNameDraft: "Ops",
+        groupMemberDraftIds: ["peer-a"],
+        peers: [
+          {
+            peer_id: "local",
+            display_name: "我",
+            hostname: "local-pc",
+            avatar_hash: null,
+            status: "online",
+            endpoints: ["0.0.0.0:24251"],
+            fingerprint: "a".repeat(64),
+            public_key: [1],
+          },
+          {
+            peer_id: "peer-a",
+            display_name: "研发一号",
+            hostname: "rd-pc",
+            avatar_hash: null,
+            status: "online",
+            endpoints: ["192.168.1.42:24251"],
+            fingerprint: "b".repeat(64),
+            public_key: [2],
+          },
+        ],
+        allPeers: [
+          {
+            peer_id: "peer-owner",
+            display_name: "群主",
+            hostname: "owner-pc",
+            avatar_hash: null,
+            status: "online",
+            endpoints: ["192.168.1.5:24251"],
+            fingerprint: "c".repeat(64),
+            public_key: [3],
+          },
+        ],
+        onToggleGroupMember: toggleMember,
+        onSaveGroup: saveGroup,
+      },
+    });
+
+    expect(screen.getByText("仅创建者可调整成员")).toBeInTheDocument();
+    expect(screen.getAllByText("群主").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("群公告")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存群资料" })).toBeDisabled();
+    await fireEvent.click(screen.getByTitle("从群聊移除 研发一号"));
+    expect(toggleMember).not.toHaveBeenCalled();
   });
 
   it("bulk adds reachable contacts and removes unavailable group members", async () => {

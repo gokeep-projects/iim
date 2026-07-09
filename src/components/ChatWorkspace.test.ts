@@ -118,6 +118,7 @@ function conversation(
     last_message_at: 1_700_000_010_000,
     last_message_preview: "",
     unread_count: 0,
+    manual_unread: false,
     pinned: false,
     muted: false,
     archived: false,
@@ -584,10 +585,12 @@ describe("ChatWorkspace composer toolbar", () => {
 
     expect(screen.queryByRole("button", { name: "收到" })).not.toBeInTheDocument();
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
-    await fireEvent.click(within(toolbar).getByRole("button", { name: "快捷回复" }));
-
-    const menu = await screen.findByRole("menu", { name: "快捷回复" });
-    await fireEvent.click(within(menu).getByRole("menuitem", { name: "收到" }));
+	    await fireEvent.click(within(toolbar).getByRole("button", { name: "表情/快捷" }));
+	
+	    const menu = await screen.findByRole("menu", { name: "表情和快捷回复" });
+	    expect(within(menu).getByLabelText("表情选择器")).toBeInTheDocument();
+	    expect(within(menu).getByLabelText("快捷回复")).toBeInTheDocument();
+	    await fireEvent.click(within(menu).getByRole("menuitem", { name: "收到" }));
 
     expect(send).toHaveBeenCalledWith("收到");
   });
@@ -661,12 +664,13 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
+    const header = screen.getByRole("group", { name: "会话标题栏" });
     expect(
-      within(screen.getByRole("group", { name: "会话标题栏" })).queryByRole(
-        "button",
-        { name: /文件|文件夹|截图|抖一抖|搜索|传输|详情|成员/ },
-      ),
+      within(header).queryByRole("button", {
+        name: /文件|文件夹|截图|抖一抖|聊天记录|传输/,
+      }),
     ).not.toBeInTheDocument();
+    await fireEvent.click(within(header).getByRole("button", { name: "查看直聊资料" }));
 
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
     expect(
@@ -674,18 +678,72 @@ describe("ChatWorkspace composer toolbar", () => {
     ).toBeInTheDocument();
     expect(within(toolbar).queryByRole("group", { name: "消息工具" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("group", { name: "会话工具" })).not.toBeInTheDocument();
-    expect(within(toolbar).queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
+    await fireEvent.click(within(toolbar).getByRole("button", { name: "聊天记录" }));
     expect(within(toolbar).queryByRole("button", { name: "传输" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 
     const moreTools = await openMoreTools();
-    await fireEvent.click(within(moreTools).getByRole("button", { name: "搜索" }));
     await fireEvent.click(within(moreTools).getByRole("button", { name: "传输" }));
     await fireEvent.click(within(moreTools).getByRole("button", { name: "详情" }));
 
     expect(toggleSearch).toHaveBeenCalledTimes(1);
     expect(showTransfers).toHaveBeenCalledTimes(1);
+    expect(showDetails).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a direct chat details icon in the header without moving low-frequency tools there", async () => {
+    const showDetails = vi.fn();
+    render(ChatWorkspace, {
+      props: {
+        onShowDetails: showDetails,
+      },
+    });
+
+    const header = screen.getByRole("group", { name: "会话标题栏" });
+    const detailsButton = within(header).getByRole("button", { name: "查看直聊资料" });
+
+    expect(detailsButton).toHaveClass("chat-header-action");
+    expect(within(header).queryByRole("button", { name: "抖一抖" })).not.toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "传输" })).not.toBeInTheDocument();
+
+    await fireEvent.click(detailsButton);
+
     expect(showDetails).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles the current conversation read state from the header", async () => {
+    const markRead = vi.fn();
+    const markUnread = vi.fn();
+    const firstRender = render(ChatWorkspace, {
+      props: {
+        conversation: conversation({
+          unread_count: 2,
+          manual_unread: true,
+        }),
+        onMarkConversationRead: markRead,
+        onMarkConversationUnread: markUnread,
+      },
+    });
+
+    const unreadHeader = screen.getByRole("group", { name: "会话标题栏" });
+    await fireEvent.click(within(unreadHeader).getByRole("button", { name: "标为已读" }));
+    expect(markRead).toHaveBeenCalledTimes(1);
+
+    firstRender.unmount();
+    render(ChatWorkspace, {
+      props: {
+        conversation: conversation({
+          unread_count: 0,
+          manual_unread: false,
+        }),
+        onMarkConversationRead: markRead,
+        onMarkConversationUnread: markUnread,
+      },
+    });
+    const readHeader = screen.getByRole("group", { name: "会话标题栏" });
+    await fireEvent.click(within(readHeader).getByRole("button", { name: "标为未读" }));
+
+    expect(markUnread).toHaveBeenCalledTimes(1);
   });
 
   it("places file, screenshot, and detail actions directly above the message input", () => {
@@ -701,7 +759,9 @@ describe("ChatWorkspace composer toolbar", () => {
     expect(
       within(toolbar).getByRole("button", { name: "截图" }),
     ).toBeInTheDocument();
-    expect(within(toolbar).getByRole("button", { name: "表情" })).toBeInTheDocument();
+	    expect(within(toolbar).getByRole("button", { name: "表情/快捷" })).toBeInTheDocument();
+	    expect(within(toolbar).queryByRole("button", { name: "快捷回复" })).not.toBeInTheDocument();
+    expect(within(toolbar).getByRole("button", { name: "聊天记录" })).toBeInTheDocument();
     expect(within(toolbar).getByRole("button", { name: "更多" })).toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "抖一抖" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
@@ -723,7 +783,7 @@ describe("ChatWorkspace composer toolbar", () => {
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
     const buttons = within(toolbar).getAllByRole("button");
 
-    expect(buttons.length).toBe(4);
+    expect(buttons.length).toBe(5);
     for (const button of buttons) {
       expect(button).toHaveClass("composer-tool-button");
       expect(button).toHaveAttribute("title");
@@ -760,20 +820,35 @@ describe("ChatWorkspace composer toolbar", () => {
     expect(sendNudge).toHaveBeenCalledTimes(1);
   });
 
-  it("closes the emoji picker when clicking outside the composer", async () => {
-    render(ChatWorkspace);
+  it("animates the chat workspace when the nudge pulse changes", async () => {
+    const { rerender } = render(ChatWorkspace, {
+      props: {
+        nudgePulseKey: 0,
+      },
+    });
+    const workspace = screen.getByLabelText("聊天工作区");
 
-    await fireEvent.click(screen.getByRole("button", { name: "表情" }));
-    expect(
-      screen.getByRole("menu", { name: "表情选择器" }),
-    ).toBeInTheDocument();
+    expect(workspace).not.toHaveClass("nudge-shake");
 
-    await fireEvent.click(document.body);
+    await rerender({ nudgePulseKey: 1 });
 
-    expect(
-      screen.queryByRole("menu", { name: "表情选择器" }),
-    ).not.toBeInTheDocument();
+    await waitFor(() => expect(workspace).toHaveClass("nudge-shake"));
   });
+
+	  it("closes the expression picker when clicking outside the composer", async () => {
+	    render(ChatWorkspace);
+	
+	    await fireEvent.click(screen.getByRole("button", { name: "表情/快捷" }));
+	    expect(
+	      screen.getByRole("menu", { name: "表情和快捷回复" }),
+	    ).toBeInTheDocument();
+	
+	    await fireEvent.click(document.body);
+	
+	    expect(
+	      screen.queryByRole("menu", { name: "表情和快捷回复" }),
+	    ).not.toBeInTheDocument();
+	  });
 
   it("keeps the composer edit menu inside the viewport at the top-left edge", async () => {
     render(ChatWorkspace);
@@ -880,8 +955,9 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
+    const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
+    const searchButton = within(toolbar).getByRole("button", { name: "聊天记录" });
     const messageTools = await openMoreTools();
-    const searchButton = within(messageTools).getByRole("button", { name: "搜索" });
     const dateButton = within(messageTools).getByRole("button", { name: "日期" });
     const selectionButton = within(messageTools).getByRole("button", { name: "多选" });
 
@@ -1135,7 +1211,7 @@ describe("ChatWorkspace conversation search", () => {
       },
     });
 
-    expect(await screen.findByPlaceholderText("搜索当前会话")).toHaveFocus();
+    expect(await screen.findByPlaceholderText("查询聊天记录")).toHaveFocus();
   });
 
   it("opens date jump from the composer toolbar", async () => {
@@ -1179,7 +1255,7 @@ describe("ChatWorkspace conversation search", () => {
 
     expect(screen.getByText("2 条结果，当前第 2 条")).toBeInTheDocument();
 
-    await fireEvent.click(screen.getByRole("button", { name: "清空搜索" }));
+    await fireEvent.click(screen.getByRole("button", { name: "清空查询" }));
 
     expect(clearSearch).toHaveBeenCalledTimes(1);
   });
@@ -1453,8 +1529,8 @@ describe("ChatWorkspace send shortcut", () => {
     });
 
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
-    await fireEvent.click(within(toolbar).getByRole("button", { name: "快捷回复" }));
-    const quickReply = within(await screen.findByRole("menu", { name: "快捷回复" })).getByRole("menuitem", { name: "收到" });
+	    await fireEvent.click(within(toolbar).getByRole("button", { name: "表情/快捷" }));
+	    const quickReply = within(await screen.findByRole("menu", { name: "表情和快捷回复" })).getByRole("menuitem", { name: "收到" });
     expect(quickReply).toBeDisabled();
     await fireEvent.click(quickReply);
 

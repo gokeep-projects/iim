@@ -1,9 +1,16 @@
 ﻿<script lang="ts">
+  import Archive from "lucide-svelte/icons/archive";
+  import AtSign from "lucide-svelte/icons/at-sign";
+  import BellOff from "lucide-svelte/icons/bell-off";
   import CheckCheck from "lucide-svelte/icons/check-check";
+  import CheckSquare from "lucide-svelte/icons/check-square";
+  import Search from "lucide-svelte/icons/search";
   import MessageSquare from "lucide-svelte/icons/message-square";
   import RefreshCw from "lucide-svelte/icons/refresh-cw";
+  import Send from "lucide-svelte/icons/send";
+  import TriangleAlert from "lucide-svelte/icons/triangle-alert";
   import UserRound from "lucide-svelte/icons/user-round";
-  import type { ContactMetadata, ConversationSummary, PeerProfile } from "../api";
+  import type { ChatMessage, ContactMetadata, ConversationSummary, PeerProfile } from "../api";
   import { directConversationPeer, visibleUnreadCount } from "../conversationState";
 
   export let self: PeerProfile | null = null;
@@ -23,27 +30,52 @@
   export let onConversationContext: (conversation: ConversationSummary, event: MouseEvent) => void = () => {};
   export let onPeerContext: (peer: PeerProfile, event: MouseEvent) => void = () => {};
   export let onOpenPeerDetails: (peer: PeerProfile) => void = () => {};
+  export let onSearchMessages: (query: string) => Promise<ChatMessage[]> = async () => [];
+  export let onOpenMessageResult: (message: ChatMessage) => void | Promise<void> = () => {};
 
   type ColumnMode = "conversations" | "contacts";
-  type ContactDirectoryFilter = "all" | "online" | "favorite" | "unavailable";
-
+  type SidebarSearchSuggestion =
+    | {
+        id: string;
+        kind: "conversation";
+        kindLabel: string;
+        title: string;
+        subtitle: string;
+        meta: string;
+        conversationId: string;
+      }
+    | {
+        id: string;
+        kind: "contact";
+        kindLabel: string;
+        title: string;
+        subtitle: string;
+        meta: string;
+        peer: PeerProfile;
+      }
+    | {
+        id: string;
+        kind: "record";
+        kindLabel: string;
+        title: string;
+        subtitle: string;
+        meta: string;
+        message: ChatMessage;
+      };
   let columnMode: ColumnMode = "conversations";
-  let contactFilter: ContactDirectoryFilter = "all";
   let refreshing = false;
-
-  $: contactFilterItems = [
-    { id: "all", label: "全部", count: contactPeers.length },
-    { id: "online", label: "可联系", count: reachablePeerCount },
-    { id: "favorite", label: "收藏", count: contactPeers.filter((peer) => metadataFor(peer.peer_id).favorite).length },
-    { id: "unavailable", label: "暂不可达", count: contactPeers.filter((peer) => peer.status !== "online").length }
-  ] satisfies Array<{ id: ContactDirectoryFilter; label: string; count: number }>;
+  let sidebarSearchQuery = "";
+  let sidebarSearchOpen = false;
+  let sidebarSearchActiveIndex = 0;
+  let sidebarMessageResults: ChatMessage[] = [];
+  let sidebarSearchLoading = false;
+  let sidebarSearchToken = 0;
 
   $: filteredConversations = conversations.filter((conversation) => !conversation.archived);
   $: visibleConversations = filteredConversations.sort(conversationPrioritySort);
   $: unreadCount = visibleUnreadCount(conversations);
   $: contactPeers = peers.filter((peer) => peer.peer_id !== self?.peer_id && !metadataFor(peer.peer_id).blocked);
   $: visibleContactPeers = contactPeers
-    .filter((peer) => contactMatchesFilter(peer, contactFilter))
     .sort((a, b) => {
       const aMeta = metadataFor(a.peer_id);
       const bMeta = metadataFor(b.peer_id);
@@ -58,6 +90,16 @@
   $: reachablePeerCount = contactPeers.filter((peer) => peer.status === "online").length;
   $: contactGroupCount = new Set(contactPeers.map((peer) => metadataFor(peer.peer_id).group_name.trim()).filter(Boolean)).size;
   $: contactTabLabel = `联系人 ${contactPeers.length} 人`;
+  $: sidebarSearchNeedle = sidebarSearchQuery.trim().toLowerCase();
+  $: sidebarSearchSuggestions = buildSidebarSearchSuggestions(
+    sidebarSearchNeedle,
+    visibleConversations,
+    contactPeers,
+    sidebarMessageResults
+  );
+  $: if (sidebarSearchActiveIndex >= sidebarSearchSuggestions.length) {
+    sidebarSearchActiveIndex = Math.max(0, sidebarSearchSuggestions.length - 1);
+  }
 
   function metadataFor(peerId: string) {
     return contactMetadata[peerId] ?? { peer_id: peerId, remark: "", group_name: "", favorite: false, blocked: false };
@@ -104,6 +146,19 @@
     return [metadata.group_name.trim() || "默认分组", peer.hostname || "未知主机", peer.endpoints[0] || "等待端点"].join(" · ");
   }
 
+  function conversationEndpointLabel(conversation: ConversationSummary) {
+    return peerForConversation(conversation)?.endpoints[0] ?? (conversation.id.startsWith("group:") ? "群聊" : "本地会话");
+  }
+
+  function conversationById(conversationId: string) {
+    return conversations.find((conversation) => conversation.id === conversationId) ?? null;
+  }
+
+  function conversationTitleFor(conversationId: string) {
+    const conversation = conversationById(conversationId);
+    return conversation ? conversationTitle(conversation) : conversationId;
+  }
+
   function conversationSearchText(conversation: ConversationSummary) {
     const peer = peerForConversation(conversation);
     return [
@@ -144,11 +199,135 @@
       .toLowerCase();
   }
 
-  function contactMatchesFilter(peer: PeerProfile, currentFilter: ContactDirectoryFilter) {
-    if (currentFilter === "online") return peer.status === "online";
-    if (currentFilter === "favorite") return metadataFor(peer.peer_id).favorite;
-    if (currentFilter === "unavailable") return peer.status !== "online";
-    return true;
+  function messagePreviewText(message: ChatMessage) {
+    if (message.recalled) return "消息已撤回";
+    if (privacyMode) return "聊天记录已隐藏";
+    const attachmentNames = message.attachments
+      .flatMap((attachment) => attachment.manifest.files.map((file) => file.path))
+      .filter(Boolean)
+      .join("、");
+    return message.body.trim() || (attachmentNames ? `文件：${attachmentNames}` : "空消息");
+  }
+
+  function buildSidebarSearchSuggestions(
+    needle: string,
+    conversationList: ConversationSummary[],
+    peerList: PeerProfile[],
+    messageResults: ChatMessage[]
+  ): SidebarSearchSuggestion[] {
+    if (!needle) return [];
+    const conversationSuggestions = conversationList
+      .filter((conversation) => conversationSearchText(conversation).includes(needle))
+      .slice(0, 4)
+      .map((conversation) => ({
+        id: `conversation:${conversation.id}`,
+        kind: "conversation" as const,
+        kindLabel: "会话",
+        title: conversationTitle(conversation),
+        subtitle: latestPreviewText(conversation) || conversationEndpointLabel(conversation),
+        meta: conversationEndpointLabel(conversation),
+        conversationId: conversation.id
+      }));
+    const contactSuggestions = peerList
+      .filter((peer) => contactSearchText(peer).includes(needle))
+      .slice(0, 4)
+      .map((peer) => ({
+        id: `contact:${peer.peer_id}`,
+        kind: "contact" as const,
+        kindLabel: "联系人",
+        title: displayPeerName(peer),
+        subtitle: peerDetailLine(peer),
+        meta: peer.status === "online" ? "在线可联系" : "暂不可达",
+        peer
+      }));
+    const recordSuggestions = messageResults
+      .filter((message) => {
+        const haystack = [
+          conversationTitleFor(message.conversation_id),
+          messagePreviewText(message),
+          message.conversation_id,
+          message.sender_id
+        ].join(" ").toLowerCase();
+        return haystack.includes(needle);
+      })
+      .slice(0, 5)
+      .map((message) => ({
+        id: `record:${message.id}`,
+        kind: "record" as const,
+        kindLabel: "记录",
+        title: conversationTitleFor(message.conversation_id),
+        subtitle: messagePreviewText(message),
+        meta: formatTime(message.created_at),
+        message
+      }));
+    return [...conversationSuggestions, ...contactSuggestions, ...recordSuggestions].slice(0, 10);
+  }
+
+  async function updateSidebarSearch(value: string) {
+    sidebarSearchQuery = value;
+    sidebarSearchOpen = Boolean(value.trim());
+    sidebarSearchActiveIndex = 0;
+    const needle = value.trim();
+    const token = ++sidebarSearchToken;
+    if (needle.length < 2) {
+      sidebarMessageResults = [];
+      sidebarSearchLoading = false;
+      return;
+    }
+    sidebarSearchLoading = true;
+    try {
+      const results = await onSearchMessages(needle);
+      if (token === sidebarSearchToken) {
+        sidebarMessageResults = results;
+      }
+    } catch {
+      if (token === sidebarSearchToken) {
+        sidebarMessageResults = [];
+      }
+    } finally {
+      if (token === sidebarSearchToken) {
+        sidebarSearchLoading = false;
+      }
+    }
+  }
+
+  function moveSidebarSearchSelection(offset: number) {
+    if (sidebarSearchSuggestions.length === 0) return;
+    sidebarSearchActiveIndex =
+      (sidebarSearchActiveIndex + offset + sidebarSearchSuggestions.length) % sidebarSearchSuggestions.length;
+  }
+
+  async function selectSidebarSearchSuggestion(suggestion: SidebarSearchSuggestion) {
+    sidebarSearchOpen = false;
+    sidebarSearchQuery = "";
+    sidebarMessageResults = [];
+    sidebarSearchActiveIndex = 0;
+    if (suggestion.kind === "conversation") {
+      await onSelectConversation(suggestion.conversationId);
+    } else if (suggestion.kind === "contact") {
+      await onSelectConversation(`direct:${suggestion.peer.peer_id}`);
+    } else {
+      await onOpenMessageResult(suggestion.message);
+    }
+  }
+
+  async function handleSidebarSearchKeydown(event: KeyboardEvent) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      sidebarSearchOpen = true;
+      moveSidebarSearchSelection(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      sidebarSearchOpen = true;
+      moveSidebarSearchSelection(-1);
+    } else if (event.key === "Enter") {
+      const suggestion = sidebarSearchSuggestions[sidebarSearchActiveIndex];
+      if (!suggestion) return;
+      event.preventDefault();
+      await selectSidebarSearchSuggestion(suggestion);
+    } else if (event.key === "Escape") {
+      sidebarSearchOpen = false;
+    }
   }
 
   function delay(milliseconds: number) {
@@ -251,6 +430,53 @@
     </button>
   </div>
 
+  <div class="search-shell sidebar-global-search">
+    <label class="search-box">
+      <Search size={14} />
+      <input
+        aria-controls="sidebar-search-suggestions"
+        aria-expanded={sidebarSearchOpen && sidebarSearchNeedle ? "true" : "false"}
+        aria-label="搜索联系人、会话、聊天记录"
+        autocomplete="off"
+        placeholder="搜索联系人、会话、聊天记录"
+        role="combobox"
+        value={sidebarSearchQuery}
+        on:blur={() => window.setTimeout(() => (sidebarSearchOpen = false), 120)}
+        on:focus={() => (sidebarSearchOpen = Boolean(sidebarSearchQuery.trim()))}
+        on:input={(event) => void updateSidebarSearch((event.currentTarget as HTMLInputElement).value)}
+        on:keydown={handleSidebarSearchKeydown}
+      />
+      {#if sidebarSearchLoading}<span class="search-loading">检索中</span>{/if}
+    </label>
+    {#if sidebarSearchOpen && sidebarSearchNeedle}
+      <div id="sidebar-search-suggestions" class="search-suggestions sidebar-search-suggestions" role="listbox" aria-label="搜索建议">
+        {#each sidebarSearchSuggestions as suggestion, index (suggestion.id)}
+          <button
+            class:active={index === sidebarSearchActiveIndex}
+            type="button"
+            role="option"
+            aria-selected={index === sidebarSearchActiveIndex}
+            on:mouseenter={() => (sidebarSearchActiveIndex = index)}
+            on:mousedown|preventDefault
+            on:click={() => selectSidebarSearchSuggestion(suggestion)}
+          >
+            <span class={`suggestion-kind ${suggestion.kind}`}>{suggestion.kindLabel}</span>
+            <span class="suggestion-copy">
+              <strong>{suggestion.title}</strong>
+              <small>{suggestion.subtitle}</small>
+            </span>
+            <span class="suggestion-meta">{suggestion.meta}</span>
+          </button>
+        {:else}
+          <div class="search-empty" role="status">
+            <strong>没有匹配结果</strong>
+            <span>可输入用户名、主机名、IP 地址或聊天内容。</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
   {#if columnMode === "conversations"}
   <div class="column-page conversation-page">
   <div class="section-heading">
@@ -276,6 +502,8 @@
       <article
         class:archived={conversation.archived}
         class:active={conversation.id === activeConversation}
+        class:manual-unread={conversation.manual_unread}
+        class:pinned={conversation.pinned}
         class:unread={conversation.unread_count > 0}
         class="conversation-item"
         on:contextmenu={(event) => onConversationContext(conversation, event)}
@@ -293,20 +521,49 @@
               ></span>
             {/if}
           </span>
-          <span class="conversation-copy">
-            <strong>
-              {conversationTitle(conversation)}
-              {#if conversation.pinned}<small class="inline-flag">置顶</small>{/if}
-              {#if conversation.muted}<small class="inline-flag">免扰</small>{/if}
-              {#if conversation.archived}<small class="inline-flag">归档</small>{/if}
-              {#if mentionedConversationIds.includes(conversation.id)}<small class="inline-flag mention-flag">@我</small>{/if}
-              {#if conversationTodoCount > 0}<small class="inline-flag todo-flag">待办 {conversationTodoCount}</small>{/if}
-              {#if conversationFailedOutboxCount > 0}
-                <small class="inline-flag outbox-flag failed">失败 {conversationFailedOutboxCount}</small>
-              {:else if conversationOutboxCount > 0}
-                <small class="inline-flag outbox-flag">待发 {conversationOutboxCount}</small>
-              {/if}
-            </strong>
+	          <span class="conversation-copy">
+	            <span class="conversation-title-line">
+	              <strong>{conversationTitle(conversation)}</strong>
+	              <span class="conversation-state-strip" aria-label="会话状态">
+	                {#if conversation.muted}
+	                  <span class="conversation-state-chip muted" title="免打扰" aria-label="免打扰">
+	                    <BellOff size={11} />
+	                  </span>
+	                {/if}
+	                {#if conversation.archived}
+	                  <span class="conversation-state-chip archived" title="已归档" aria-label="已归档">
+	                    <Archive size={11} />
+	                  </span>
+	                {/if}
+	                {#if conversation.manual_unread}
+	                  <span class="conversation-state-chip manual" title="手动标为未读" aria-label="手动标为未读">
+	                    <MessageSquare size={11} />
+	                  </span>
+	                {/if}
+	                {#if mentionedConversationIds.includes(conversation.id)}
+	                  <span class="conversation-state-chip mention" title="@我" aria-label="@我">
+	                    <AtSign size={11} />
+	                  </span>
+	                {/if}
+	                {#if conversationTodoCount > 0}
+	                  <span class="conversation-state-chip todo" title={`${conversationTodoCount} 个待办`} aria-label={`${conversationTodoCount} 个待办`}>
+	                    <CheckSquare size={11} />
+	                    <b>{conversationTodoCount}</b>
+	                  </span>
+	                {/if}
+	                {#if conversationFailedOutboxCount > 0}
+	                  <span class="conversation-state-chip outbox failed" title={`${conversationFailedOutboxCount} 条发送失败`} aria-label={`${conversationFailedOutboxCount} 条发送失败`}>
+	                    <TriangleAlert size={11} />
+	                    <b>{conversationFailedOutboxCount}</b>
+	                  </span>
+	                {:else if conversationOutboxCount > 0}
+	                  <span class="conversation-state-chip outbox" title={`${conversationOutboxCount} 条待发送`} aria-label={`${conversationOutboxCount} 条待发送`}>
+	                    <Send size={11} />
+	                    <b>{conversationOutboxCount}</b>
+	                  </span>
+	                {/if}
+	              </span>
+	            </span>
             <small>
               {#if conversation.draft_preview}
                 <span class="draft-label">草稿</span>{draftPreviewText(conversation)}
@@ -325,11 +582,16 @@
           {#if conversation.unread_count > 0}
             <span
               class:muted={conversation.muted}
+              class:manual={conversation.manual_unread}
               class="unread-badge"
-              aria-label={`${conversationTitle(conversation)} ${conversation.unread_count} 条未读`}
-              title={conversation.muted ? "免扰未读" : "未读消息"}
+              aria-label={`${conversationTitle(conversation)} ${conversation.manual_unread ? "已标为未读" : `${conversation.unread_count} 条未读`}`}
+              title={conversation.manual_unread ? "手动标为未读" : conversation.muted ? "免扰未读" : "未读消息"}
             >
-              {conversation.muted ? "" : conversation.unread_count > 99 ? "99+" : conversation.unread_count}
+              {#if conversation.manual_unread}
+                未读
+              {:else}
+                {conversation.muted ? "" : conversation.unread_count > 99 ? "99+" : conversation.unread_count}
+              {/if}
             </span>
           {/if}
         </span>
@@ -346,21 +608,6 @@
         <strong>联系人发现</strong>
         <small>{contactGroupCount || 1} 个分组 · 支持按用户名、主机名、IP 地址搜索</small>
       </div>
-    </div>
-
-    <div class="contact-filter-tabs sidebar-contact-filter visually-hidden-filter" role="tablist" aria-label="联系人筛选">
-      {#each contactFilterItems as item}
-        <button
-          class:active={contactFilter === item.id}
-          type="button"
-          role="tab"
-          aria-selected={contactFilter === item.id}
-          on:click={() => (contactFilter = item.id)}
-        >
-          {item.label}
-          <small>{item.count}</small>
-        </button>
-      {/each}
     </div>
 
     <div class="section-heading peer-heading">

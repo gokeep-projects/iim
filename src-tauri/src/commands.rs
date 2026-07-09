@@ -1097,7 +1097,7 @@ pub fn create_group(
 
     let conversation_id = state
         .store()
-        .create_group_conversation(name.trim(), &all_members)
+        .create_group_conversation(name.trim(), &self_id, &all_members)
         .map_err(|error| error.to_string())?;
     let recipients = remote_members;
     let broadcast_result = broadcast_group_state(
@@ -1133,6 +1133,14 @@ pub fn update_group(
     }
 
     let self_id = state.identity().peer_id().to_string();
+    let owner_peer_id = state
+        .store()
+        .group_owner_peer_id(conversation_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "group conversation not found".to_string())?;
+    if !owner_peer_id.is_empty() && owner_peer_id != self_id {
+        return Err("only the group creator can update group members".to_string());
+    }
     let remote_members =
         unblocked_remote_group_members(request.member_peer_ids, &self_id, state.inner())
             .map_err(|error| error.to_string())?;
@@ -1143,7 +1151,7 @@ pub fn update_group(
 
     state
         .store()
-        .upsert_group_conversation(conversation_id, name, announcement, &all_members)
+        .upsert_group_conversation(conversation_id, name, announcement, &self_id, &all_members)
         .map_err(|error| error.to_string())?;
     let recipients = remote_members;
     let broadcast_result = broadcast_group_state(

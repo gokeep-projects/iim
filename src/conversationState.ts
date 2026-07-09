@@ -37,7 +37,7 @@ export function markConversationReadInList(
     return conversations;
   }
   return conversations.map((conversation) =>
-    conversation.id === conversationId ? { ...conversation, unread_count: 0 } : conversation
+    conversation.id === conversationId ? { ...conversation, unread_count: 0, manual_unread: false } : conversation
   );
 }
 
@@ -49,16 +49,20 @@ export function markConversationUnreadInList(
     return conversations;
   }
   return conversations.map((conversation) =>
-    conversation.id === conversationId ? { ...conversation, unread_count: Math.max(1, conversation.unread_count) } : conversation
+    conversation.id === conversationId
+      ? { ...conversation, unread_count: Math.max(1, conversation.unread_count), manual_unread: true }
+      : conversation
   );
 }
 
 export function markAllConversationsReadInList(conversations: ConversationSummary[]): ConversationSummary[] {
-  if (!conversations.some((conversation) => conversation.unread_count > 0)) {
+  if (!conversations.some((conversation) => conversation.unread_count > 0 || conversation.manual_unread)) {
     return conversations;
   }
   return conversations.map((conversation) =>
-    conversation.unread_count > 0 ? { ...conversation, unread_count: 0 } : conversation
+    conversation.unread_count > 0 || conversation.manual_unread
+      ? { ...conversation, unread_count: 0, manual_unread: false }
+      : conversation
   );
 }
 

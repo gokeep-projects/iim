@@ -31,9 +31,11 @@ export interface ConversationSummary {
   id: string;
   title: string;
   group_announcement?: string;
+  group_owner_peer_id?: string;
   last_message_at: number;
   last_message_preview: string;
   unread_count: number;
+  manual_unread: boolean;
   pinned: boolean;
   muted: boolean;
   archived: boolean;
@@ -117,9 +119,26 @@ export const defaultTransportConfig: TransportConfig = {
   },
 };
 
+export type SendShortcut = "enter" | "ctrl_enter";
+export type ScreenshotShortcut = "ctrl_alt_a" | "ctrl_shift_a" | "none";
+export type WindowShortcut = "ctrl_alt_i" | "ctrl_shift_i" | "none";
+
+export interface AppShortcuts {
+  send_message: SendShortcut;
+  screenshot: ScreenshotShortcut;
+  toggle_window: WindowShortcut;
+}
+
+export const defaultAppShortcuts: AppShortcuts = {
+  send_message: "enter",
+  screenshot: "ctrl_alt_a",
+  toggle_window: "ctrl_alt_i",
+};
+
 export interface AppPreferences {
   dark_mode: boolean;
-  send_shortcut: "enter" | "ctrl_enter";
+  send_shortcut: SendShortcut;
+  shortcuts: AppShortcuts;
   show_notification_preview: boolean;
   privacy_mode: boolean;
   close_to_tray: boolean;
@@ -375,9 +394,11 @@ export async function listConversations(): Promise<ConversationSummary[]> {
       {
         id: "direct:demo-peer",
         title: "研发一号",
+        group_owner_peer_id: "",
         last_message_at: Date.now(),
         last_message_preview: "文件、截图、群聊和全局搜索都已就绪",
         unread_count: 2,
+        manual_unread: false,
         pinned: true,
         muted: false,
         archived: false,
@@ -386,9 +407,11 @@ export async function listConversations(): Promise<ConversationSummary[]> {
       {
         id: "group:lan",
         title: "内网群聊",
+        group_owner_peer_id: "local-demo",
         last_message_at: Date.now() - 60000,
         last_message_preview: "今天的内网同步会议 15:00 开始",
         unread_count: 0,
+        manual_unread: false,
         pinned: false,
         muted: false,
         archived: false,
@@ -784,9 +807,11 @@ export async function updateGroup(
       id: conversationId,
       title: name.trim() || "内网群聊",
       group_announcement: announcement.trim(),
+      group_owner_peer_id: "local-demo",
       last_message_at: Date.now(),
       last_message_preview: "",
       unread_count: 0,
+      manual_unread: false,
       pinned: false,
       muted: false,
       archived: false,
@@ -909,6 +934,7 @@ export async function getAppPreferences(): Promise<AppPreferences> {
     return {
       dark_mode: false,
       send_shortcut: "enter",
+      shortcuts: defaultAppShortcuts,
       show_notification_preview: true,
       privacy_mode: false,
       close_to_tray: true,

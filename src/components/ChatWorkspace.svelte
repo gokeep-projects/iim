@@ -1,10 +1,11 @@
 ﻿<script lang="ts">
-  import { tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { convertFileSrc } from "@tauri-apps/api/core";
   import Archive from "lucide-svelte/icons/archive";
   import BellOff from "lucide-svelte/icons/bell-off";
   import BellRing from "lucide-svelte/icons/bell-ring";
   import CalendarDays from "lucide-svelte/icons/calendar-days";
+  import CheckCheck from "lucide-svelte/icons/check-check";
   import CheckSquare from "lucide-svelte/icons/check-square";
   import ChevronDown from "lucide-svelte/icons/chevron-down";
   import ChevronUp from "lucide-svelte/icons/chevron-up";
@@ -68,6 +69,7 @@
   export let pendingFileDrafts: PendingFileDraft[] = [];
   export let transferTasks: TransferTask[] = [];
   export let conversationSearchOpen = false;
+  export let nudgePulseKey = 0;
   export let conversationSearchFocus: ConversationSearchFocus = "query";
   export let conversationSearchQuery = "";
   export let conversationSearchDate = "";
@@ -94,6 +96,8 @@
   export let onOpenTransfer: (transferId: string) => void | Promise<void> = () => {};
   export let onCopyAttachmentFiles: (fileList: string) => void | Promise<void> = () => {};
   export let onRetryMessage: (message: ChatMessage) => void | Promise<void> = () => {};
+  export let onMarkConversationRead: () => void | Promise<void> = () => {};
+  export let onMarkConversationUnread: () => void | Promise<void> = () => {};
   export let onTogglePin: () => void | Promise<void> = () => {};
   export let onToggleMute: () => void | Promise<void> = () => {};
   export let onToggleArchive: () => void | Promise<void> = () => {};
@@ -122,9 +126,11 @@
   export let onUnpinPinnedMessage: (message: ChatMessage) => void | Promise<void> = () => {};
 
   let dragging = false;
-  let emojiOpen = false;
-  let quickRepliesOpen = false;
+  let expressionMenuOpen = false;
   let moreToolsOpen = false;
+  let nudgeAnimating = false;
+  let lastNudgePulseKey = 0;
+  let nudgeAnimationTimer: number | null = null;
   let textareaElement: HTMLTextAreaElement | null = null;
   let messageListElement: HTMLDivElement | null = null;
   let conversationSearchInputElement: HTMLInputElement | null = null;
@@ -208,6 +214,30 @@
     void onSendNudge();
   }
 
+  function markConversationReadState() {
+    if (conversationActionsDisabled) return;
+    if (conversation?.unread_count && conversation.unread_count > 0) {
+      void onMarkConversationRead();
+    } else {
+      void onMarkConversationUnread();
+    }
+  }
+
+  function triggerNudgeAnimation() {
+    if (nudgeAnimationTimer !== null) {
+      window.clearTimeout(nudgeAnimationTimer);
+      nudgeAnimationTimer = null;
+    }
+    nudgeAnimating = false;
+    void tick().then(() => {
+      nudgeAnimating = true;
+      nudgeAnimationTimer = window.setTimeout(() => {
+        nudgeAnimating = false;
+        nudgeAnimationTimer = null;
+      }, 720);
+    });
+  }
+
   function handleComposerKeydown(event: KeyboardEvent) {
     if (mentionRange && mentionCandidates.length > 0) {
       if (event.key === "ArrowDown") {
@@ -261,7 +291,7 @@
 
   function appendEmoji(emoji: string) {
     onDraftChange(`${draft}${emoji}`);
-    emojiOpen = false;
+    expressionMenuOpen = false;
     closeMentionPanel();
   }
 
@@ -288,7 +318,7 @@
   function sendQuickReply(reply: string) {
     if (sendDisabledReason) return;
     void onSend(reply);
-    quickRepliesOpen = false;
+    expressionMenuOpen = false;
     closeMentionPanel();
   }
 
@@ -387,8 +417,7 @@
 
   function closeComposerOverlays() {
     composerMenu = null;
-    emojiOpen = false;
-    quickRepliesOpen = false;
+    expressionMenuOpen = false;
     moreToolsOpen = false;
     closeMentionPanel();
   }
@@ -852,11 +881,26 @@
       : "输入关键词或选择日期定位聊天记录"
     : `${conversationSearchResults.length} 条结果${focusedSearchResultIndex >= 0 ? `，当前第 ${focusedSearchResultIndex + 1} 条` : ""}`;
   $: groupAnnouncement = isGroup ? conversation?.group_announcement?.trim() ?? "" : "";
+  $: conversationHasUnread = Boolean(conversation && conversation.unread_count > 0);
+  $: conversationReadStateLabel = conversationHasUnread ? "标为已读" : "标为未读";
+  $: conversationReadStateTitle = conversationHasUnread
+    ? conversation?.manual_unread
+      ? "清除手动未读标记"
+      : "将当前会话标为已读"
+    : "稍后处理，标为未读";
   $: if (conversationSearchOpen) {
     conversationSearchFocus;
     focusConversationSearchInput();
   }
+  $: if (nudgePulseKey !== lastNudgePulseKey) {
+    lastNudgePulseKey = nudgePulseKey;
+    if (nudgePulseKey > 0) triggerNudgeAnimation();
+  }
   $: scrollFocusedMessage(focusedMessageId);
+
+  onDestroy(() => {
+    if (nudgeAnimationTimer !== null) window.clearTimeout(nudgeAnimationTimer);
+  });
 </script>
 
 <svelte:window
@@ -864,9 +908,9 @@
   on:keydown={handleWindowKeydown}
 />
 
-<section class="chat-workspace" aria-label="聊天工作区">
+<section class:nudge-shake={nudgeAnimating} class="chat-workspace" aria-label="聊天工作区">
   <header class="chat-header" role="group" aria-label="会话标题栏">
-    <div>
+    <div class="chat-header-copy">
       <span class="eyebrow">{headerScopeLabel}</span>
       <h1>{title}</h1>
       <p>
@@ -885,6 +929,34 @@
           </span>
         {/if}
       </p>
+    </div>
+    <div class="chat-header-actions" aria-label="会话快捷入口">
+      <button
+        class:active={conversationHasUnread}
+        class="chat-read-state-button"
+        type="button"
+        title={conversationActionsDisabledReason || conversationReadStateTitle}
+        aria-label={conversationReadStateLabel}
+        disabled={conversationActionsDisabled}
+        on:click={markConversationReadState}
+      >
+        <CheckCheck size={15} />
+        <span>{conversationReadStateLabel}</span>
+      </button>
+      <button
+        class="icon-button chat-header-action"
+        type="button"
+        title={conversationActionsDisabledReason || (isGroup ? "查看群成员" : "查看直聊资料")}
+        aria-label={isGroup ? "查看群成员" : "查看直聊资料"}
+        disabled={conversationActionsDisabled}
+        on:click={showDetails}
+      >
+        {#if isGroup}
+          <Users size={16} />
+        {:else}
+          <Info size={16} />
+        {/if}
+      </button>
     </div>
   </header>
 
@@ -941,18 +1013,18 @@
         <input
           bind:this={conversationSearchInputElement}
           value={conversationSearchQuery}
-          placeholder="搜索当前会话"
+          placeholder="查询聊天记录"
           on:input={(event) => onConversationSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
         />
         <button type="submit">
           <Search size={13} />
-          搜索
+          查询
         </button>
         <button type="button" disabled={!conversationSearchQuery && !conversationSearchDate && conversationSearchResults.length === 0} on:click={onClearConversationSearch}>
           <X size={13} />
-          清空搜索
+          清空查询
         </button>
-        <button class="icon-button" type="button" title="关闭搜索" on:click={onToggleConversationSearch}>
+        <button class="icon-button" type="button" title="关闭查询" on:click={onToggleConversationSearch}>
           <X size={15} />
         </button>
       </form>
@@ -1463,55 +1535,46 @@
           <Image size={15} />
           <span class="composer-tool-label">截图</span>
         </button>
+	        <button
+	          class:active={expressionMenuOpen}
+	          class="tool-button composer-tool-button"
+	          type="button"
+	          title="表情和快捷回复"
+	          on:mouseenter={() => {
+	            moreToolsOpen = false;
+	            expressionMenuOpen = true;
+	          }}
+	          on:click={(event) => {
+	            event.stopPropagation();
+	            moreToolsOpen = false;
+	            expressionMenuOpen = !expressionMenuOpen;
+	          }}
+	        >
+	          <Smile size={15} />
+	          <span class="composer-tool-label">表情/快捷</span>
+	        </button>
         <button
-          class:active={emojiOpen}
+          class:active={conversationSearchOpen}
           class="tool-button composer-tool-button"
           type="button"
-          title="插入表情"
-          on:click={(event) => {
-            event.stopPropagation();
-            quickRepliesOpen = false;
-            moreToolsOpen = false;
-            emojiOpen = !emojiOpen;
-          }}
+          title={conversationActionsDisabledReason || "查询聊天记录"}
+          disabled={conversationActionsDisabled}
+          on:click={toggleConversationSearch}
         >
-          <Smile size={15} />
-          <span class="composer-tool-label">表情</span>
+          <Search size={15} />
+          <span class="composer-tool-label">聊天记录</span>
         </button>
-        {#if quickReplies.length > 0}
-          <button
-            class:active={quickRepliesOpen}
-            class="tool-button composer-tool-button"
-            type="button"
-            title="快捷回复"
-            on:mouseenter={() => {
-              emojiOpen = false;
-              moreToolsOpen = false;
-              quickRepliesOpen = true;
-            }}
-            on:click={(event) => {
-              event.stopPropagation();
-              emojiOpen = false;
-              moreToolsOpen = false;
-              quickRepliesOpen = !quickRepliesOpen;
-            }}
-          >
-            <Send size={15} />
-            <span class="composer-tool-label">快捷回复</span>
-          </button>
-        {/if}
         <button
           class:active={moreToolsOpen}
           class="tool-button composer-tool-button"
           type="button"
           title="更多工具"
-          on:click={(event) => {
-            event.stopPropagation();
-            emojiOpen = false;
-            quickRepliesOpen = false;
-            moreToolsOpen = !moreToolsOpen;
-          }}
-        >
+	          on:click={(event) => {
+	            event.stopPropagation();
+	            expressionMenuOpen = false;
+	            moreToolsOpen = !moreToolsOpen;
+	          }}
+	        >
           <MoreHorizontal size={15} />
           <span class="composer-tool-label">更多</span>
         </button>
@@ -1537,16 +1600,6 @@
         >
           <BellRing size={15} />
           <span class="composer-tool-label">抖一抖</span>
-        </button>
-        <button
-          class="tool-button composer-tool-button"
-          type="button"
-          title={conversationActionsDisabledReason || "搜索当前会话"}
-          disabled={conversationActionsDisabled}
-          on:click={toggleConversationSearch}
-        >
-          <Search size={15} />
-          <span class="composer-tool-label">搜索</span>
         </button>
         <button
           class="tool-button composer-tool-button"
@@ -1629,31 +1682,54 @@
       </span>
     </div>
 
-    {#if quickRepliesOpen && quickReplies.length > 0}
-      <div class="quick-reply-menu" role="menu" aria-label="快捷回复" tabindex="-1" on:mouseenter={() => (quickRepliesOpen = true)}>
-        {#each quickReplies as reply}
-          <button
-            class="quick-reply-option"
-            type="button"
-            role="menuitem"
-            title={sendDisabledReason || reply}
-            disabled={Boolean(sendDisabledReason)}
-            on:click={() => sendQuickReply(reply)}
-          >
-            <Send size={12} />
-            {reply}
-          </button>
-        {/each}
-      </div>
-    {/if}
-
-    {#if emojiOpen}
-      <div class="emoji-panel" role="menu" aria-label="表情选择器">
-        {#each emojiChoices as emoji}
-          <button type="button" role="menuitem" title={`插入 ${emoji}`} on:click={() => appendEmoji(emoji)}>{emoji}</button>
-        {/each}
-      </div>
-    {/if}
+	    {#if expressionMenuOpen}
+	      <div
+	        class="expression-menu"
+	        role="menu"
+	        aria-label="表情和快捷回复"
+	        tabindex="-1"
+	        on:mouseenter={() => (expressionMenuOpen = true)}
+	        on:click|stopPropagation
+	        on:keydown={(event) => {
+	          if (event.key === "Escape") expressionMenuOpen = false;
+	        }}
+	      >
+	        <section class="expression-menu-section" aria-label="表情选择器">
+	          <header>
+	            <Smile size={13} />
+	            <span>表情</span>
+	          </header>
+	          <div class="emoji-panel">
+	            {#each emojiChoices as emoji}
+	              <button type="button" role="menuitem" title={`插入 ${emoji}`} on:click={() => appendEmoji(emoji)}>{emoji}</button>
+	            {/each}
+	          </div>
+	        </section>
+	        {#if quickReplies.length > 0}
+	          <section class="expression-menu-section" aria-label="快捷回复">
+	            <header>
+	              <Send size={13} />
+	              <span>快捷回复</span>
+	            </header>
+	            <div class="quick-reply-menu">
+	              {#each quickReplies as reply}
+	                <button
+	                  class="quick-reply-option"
+	                  type="button"
+	                  role="menuitem"
+	                  title={sendDisabledReason || reply}
+	                  disabled={Boolean(sendDisabledReason)}
+	                  on:click={() => sendQuickReply(reply)}
+	                >
+	                  <Send size={12} />
+	                  {reply}
+	                </button>
+	              {/each}
+	            </div>
+	          </section>
+	        {/if}
+	      </div>
+	    {/if}
 
     {#if mentionRange && mentionCandidates.length > 0}
       <div class="mention-panel" role="listbox" aria-label="群成员提醒">

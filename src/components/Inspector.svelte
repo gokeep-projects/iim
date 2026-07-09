@@ -44,6 +44,7 @@
   export let groupNameDraft = "";
   export let groupAnnouncementDraft = "";
   export let groupMemberDraftIds: string[] = [];
+  export let canManageGroup = true;
   export let transferTasks: TransferTask[] = [];
   export let storageOverview: StorageOverview | null = null;
   export let networkWarning = "";
@@ -137,6 +138,13 @@
 
   function peerLabel(peer: PeerProfile) {
     return contactMetadata[peer.peer_id]?.remark || peer.display_name;
+  }
+
+  function peerLabelById(peerId: string) {
+    if (!peerId.trim()) return "本机";
+    if (peerId === selfPeerId) return "我";
+    const peer = [...peers, ...allPeers].find((item) => item.peer_id === peerId);
+    return peer ? peerLabel(peer) : peerId;
   }
 
   function peerBlocked(peer: PeerProfile) {
@@ -310,12 +318,14 @@
   }
 
   function addReachableAvailableMembers() {
+    if (!canManageGroup) return;
     for (const peer of reachableAvailableGroupPeers) {
       onToggleGroupMember(peer.peer_id);
     }
   }
 
   function removeUnreachableCurrentMembers() {
+    if (!canManageGroup) return;
     for (const peer of unreachableRemovableGroupMembers) {
       onToggleGroupMember(peer.peer_id);
     }
@@ -333,6 +343,8 @@
   $: groupMemberTotalCount = peers.length + unresolvedGroupMemberIds.length;
   $: reachableGroupMemberCount = peers.filter((peer) => peer.status === "online").length;
   $: unreachableGroupMemberCount = groupMemberTotalCount - reachableGroupMemberCount;
+  $: groupOwnerPeerId = conversation?.group_owner_peer_id?.trim() ?? "";
+  $: groupOwnerLabel = groupOwnerPeerId ? peerLabelById(groupOwnerPeerId) : "本机";
   $: visibleCurrentGroupMembers = peers.filter((peer) => matchesMemberQuery(peer, memberQuery) && matchesMemberReachability(peer, memberReachabilityFilter));
   $: visibleUnresolvedGroupMemberIds = unresolvedGroupMemberIds.filter(
     (peerId) => matchesUnresolvedMemberQuery(peerId, memberQuery) && matchesUnresolvedMemberReachability(memberReachabilityFilter)
@@ -409,8 +421,8 @@
             <dd>{reachableGroupMemberCount} 人</dd>
           </div>
           <div>
-            <dt>同步</dt>
-            <dd>本机 fanout</dd>
+            <dt>创建者</dt>
+            <dd>{groupOwnerLabel}</dd>
           </div>
           <div>
             <dt>待保存</dt>
@@ -423,6 +435,7 @@
         <input
           value={groupNameDraft}
           placeholder="内网群聊"
+          disabled={!canManageGroup}
           on:input={(event) => onGroupNameChange((event.currentTarget as HTMLInputElement).value)}
         />
       </label>
@@ -433,6 +446,7 @@
           rows="3"
           value={groupAnnouncementDraft}
           placeholder="填写发布窗口、值班规则或群内约定"
+          disabled={!canManageGroup}
           on:input={(event) => onGroupAnnouncementChange((event.currentTarget as HTMLTextAreaElement).value)}
         ></textarea>
       </label>
@@ -440,14 +454,14 @@
         <div class="group-editor-head">
           <div>
             <strong>成员编辑</strong>
-            <small>{groupMemberDraftIds.length} 名远端成员</small>
+            <small>{canManageGroup ? `${groupMemberDraftIds.length} 名远端成员` : "仅创建者可调整成员"}</small>
           </div>
           <div class="group-editor-actions">
-            <button type="button" disabled={reachableAvailableGroupPeers.length === 0} on:click={addReachableAvailableMembers}>
+            <button type="button" disabled={!canManageGroup || reachableAvailableGroupPeers.length === 0} on:click={addReachableAvailableMembers}>
               <UserPlus size={13} />
               添加可联系 {reachableAvailableGroupPeers.length}
             </button>
-            <button type="button" disabled={removableUnavailableMemberCount === 0} on:click={removeUnreachableCurrentMembers}>
+            <button type="button" disabled={!canManageGroup || removableUnavailableMemberCount === 0} on:click={removeUnreachableCurrentMembers}>
               <UserMinus size={13} />
               移除暂不可达 {removableUnavailableMemberCount}
             </button>
@@ -526,11 +540,11 @@
                       <ShieldCheck size={14} />
                     </button>
                     {#if draftGroupMemberIds.has(peer.peer_id)}
-                      <button class="icon-action danger" type="button" title={`从群聊移除 ${peerLabel(peer)}`} on:click={() => onToggleGroupMember(peer.peer_id)}>
+                      <button class="icon-action danger" type="button" disabled={!canManageGroup} title={`从群聊移除 ${peerLabel(peer)}`} on:click={() => canManageGroup && onToggleGroupMember(peer.peer_id)}>
                         <UserMinus size={14} />
                       </button>
                     {:else}
-                      <button class="icon-action" type="button" title={`恢复 ${peerLabel(peer)}`} on:click={() => onToggleGroupMember(peer.peer_id)}>
+                      <button class="icon-action" type="button" disabled={!canManageGroup} title={`恢复 ${peerLabel(peer)}`} on:click={() => canManageGroup && onToggleGroupMember(peer.peer_id)}>
                         <UserPlus size={14} />
                       </button>
                     {/if}
@@ -550,7 +564,7 @@
                   <small>{peerId}</small>
                 </div>
                 <div class="member-row-actions">
-                  <button class="icon-action danger" type="button" title={`从群聊移除 ${peerId}`} on:click={() => onToggleGroupMember(peerId)}>
+                  <button class="icon-action danger" type="button" disabled={!canManageGroup} title={`从群聊移除 ${peerId}`} on:click={() => canManageGroup && onToggleGroupMember(peerId)}>
                     <UserMinus size={14} />
                   </button>
                 </div>
@@ -580,7 +594,7 @@
                   <strong>{peerLabel(peer)}</strong>
                   <small>{peer.hostname} · {peer.endpoints[0] ?? "等待端点"}</small>
                 </div>
-                <button class="icon-action" type="button" title={`${draftGroupMemberIds.has(peer.peer_id) ? "取消添加" : "添加"} ${peerLabel(peer)}`} on:click={() => onToggleGroupMember(peer.peer_id)}>
+                <button class="icon-action" type="button" disabled={!canManageGroup} title={`${draftGroupMemberIds.has(peer.peer_id) ? "取消添加" : "添加"} ${peerLabel(peer)}`} on:click={() => canManageGroup && onToggleGroupMember(peer.peer_id)}>
                   {#if draftGroupMemberIds.has(peer.peer_id)}
                     <UserMinus size={14} />
                   {:else}
@@ -598,13 +612,13 @@
             class="action-card primary-card"
             type="button"
             aria-label="保存群资料"
-            disabled={!groupNameDraft.trim() || groupMemberDraftIds.length === 0}
+            disabled={!canManageGroup || !groupNameDraft.trim() || groupMemberDraftIds.length === 0}
             on:click={onSaveGroup}
           >
             <Save size={15} />
             <span>
               <strong>保存群资料</strong>
-              <small>同步名称与成员</small>
+              <small>{canManageGroup ? "同步名称与成员" : "仅创建者可保存"}</small>
             </span>
           </button>
           <button class="action-card" type="button" aria-label="导出聊天记录" on:click={onExportConversation}>

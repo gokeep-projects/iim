@@ -60,6 +60,10 @@
   import {
     type ChatMessage,
     type AppPreferences,
+    type AppShortcuts,
+    type ScreenshotShortcut,
+    type SendShortcut,
+    type WindowShortcut,
     type ContactMetadata,
     type ConversationDraft,
     type ConversationSummary,
@@ -87,6 +91,7 @@
     deleteTransfer,
     exportConversationHistory,
     forwardMessage,
+    defaultAppShortcuts,
     defaultTransportConfig,
     getNetworkSettings,
     getSelfProfile,
@@ -225,9 +230,11 @@
     {
       id: "direct:demo-peer",
       title: "产品经理",
+      group_owner_peer_id: "",
       last_message_at: Date.now(),
       last_message_preview: "欢迎使用灵犀内网通，搜索、文件和群聊入口都在这里。",
       unread_count: 1,
+      manual_unread: false,
       pinned: true,
       muted: false,
       archived: false,
@@ -236,9 +243,11 @@
     {
       id: "direct:demo-ops",
       title: "运维中控",
+      group_owner_peer_id: "",
       last_message_at: Date.now() - 90000,
       last_message_preview: "192.168.1.99 暂不可达，刷新后会自动更新状态。",
       unread_count: 0,
+      manual_unread: false,
       pinned: false,
       muted: false,
       archived: false,
@@ -319,6 +328,7 @@
   let conversationSearchDate = "";
   let conversationSearchResults: ChatMessage[] = [];
   let focusedMessageId = "";
+  let nudgePulseKey = 0;
   let mentionedConversationIds: string[] = [];
   let favoriteMessages: ChatMessage[] = [];
   let pinnedMessages: ChatMessage[] = [];
@@ -329,6 +339,7 @@
   let settings = defaultSettings;
   let dark = false;
   let sendShortcut: AppPreferences["send_shortcut"] = "enter";
+  let appShortcuts: AppShortcuts = { ...defaultAppShortcuts };
   let showNotificationPreview = true;
   let privacyMode = false;
   let closeToTray = true;
@@ -344,6 +355,12 @@
   let requireContactForMessaging = false;
   let inspectorTab: InspectorTab = "details";
   let inspectorOpen = false;
+
+  const profileMenuStatusChoices: Array<{ value: PeerStatus; label: string; tone: "online" | "away" | "offline" }> = [
+    { value: "online", label: "在线", tone: "online" },
+    { value: "away", label: "离开", tone: "away" },
+    { value: "offline", label: "隐身", tone: "offline" }
+  ];
   let settingsTab: SettingsTab = "profile";
   let seedText = "";
   let rangeText = "";
@@ -418,6 +435,10 @@
       ]
     : [];
   $: activeGroupMemberCount = activeConversation.startsWith("group:") ? activeGroupMemberIds.length : activeGroupMembers.length;
+  $: activeGroupOwnerPeerId = activeConversationSummary?.group_owner_peer_id?.trim() ?? "";
+  $: activeGroupCanManage = !activeConversation.startsWith("group:")
+    || !activeGroupOwnerPeerId
+    || activeGroupOwnerPeerId === self?.peer_id;
   $: messageSenderLabels = {
     ...(self ? { [self.peer_id]: "我" } : {}),
     ...Object.fromEntries(peers.map((peer) => [peer.peer_id, displayPeerName(peer)]))
@@ -425,6 +446,15 @@
   $: conversationTitleMap = Object.fromEntries(
     conversations.map((conversation) => [conversation.id, conversationDisplayTitle(conversation, peers, contactMetadata)])
   );
+  $: welcomeRecentConversation =
+    [...conversations].filter((conversation) => !conversation.archived).sort((left, right) => right.last_message_at - left.last_message_at)[0] ??
+    conversations[0] ??
+    null;
+  $: welcomeRecentTitle = welcomeRecentConversation
+    ? conversationDisplayTitle(welcomeRecentConversation, peers, contactMetadata)
+    : "";
+  $: welcomeRecentPreview = welcomeRecentConversation ? welcomeConversationPreview(welcomeRecentConversation) : "";
+  $: welcomeRecentTime = welcomeRecentConversation ? welcomeConversationTime(welcomeRecentConversation) : "";
   $: todoConversationCounts = todoMessages.reduce<Record<string, number>>((counts, message) => {
     counts[message.conversation_id] = (counts[message.conversation_id] ?? 0) + 1;
     return counts;
@@ -591,10 +621,27 @@
     };
   });
 
+  function normalizeAppShortcuts(preferences: AppPreferences): AppShortcuts {
+    const requested = preferences.shortcuts ?? defaultAppShortcuts;
+    const sendMessage: SendShortcut =
+      preferences.send_shortcut === "ctrl_enter" || requested.send_message === "ctrl_enter" ? "ctrl_enter" : "enter";
+    const screenshot: ScreenshotShortcut =
+      requested.screenshot === "ctrl_shift_a" || requested.screenshot === "none" ? requested.screenshot : "ctrl_alt_a";
+    const toggleWindow: WindowShortcut =
+      requested.toggle_window === "ctrl_shift_i" || requested.toggle_window === "none" ? requested.toggle_window : "ctrl_alt_i";
+    return {
+      send_message: sendMessage,
+      screenshot,
+      toggle_window: toggleWindow,
+    };
+  }
+
   function normalizeAppPreferences(preferences: AppPreferences): AppPreferences {
+    const shortcuts = normalizeAppShortcuts(preferences);
     return {
       dark_mode: preferences.dark_mode,
-      send_shortcut: preferences.send_shortcut === "ctrl_enter" ? "ctrl_enter" : "enter",
+      send_shortcut: shortcuts.send_message,
+      shortcuts,
       show_notification_preview: preferences.privacy_mode ? false : preferences.show_notification_preview,
       privacy_mode: preferences.privacy_mode,
       close_to_tray: preferences.close_to_tray,
@@ -610,6 +657,7 @@
     return normalizeAppPreferences({
       dark_mode: dark,
       send_shortcut: sendShortcut,
+      shortcuts: appShortcuts,
       show_notification_preview: showNotificationPreview,
       privacy_mode: privacyMode,
       close_to_tray: closeToTray,
@@ -813,6 +861,7 @@
       const preferences = normalizeAppPreferences(savedPreferences);
       dark = preferences.dark_mode;
       sendShortcut = preferences.send_shortcut;
+      appShortcuts = preferences.shortcuts;
       showNotificationPreview = preferences.show_notification_preview;
       privacyMode = preferences.privacy_mode;
       closeToTray = preferences.close_to_tray;
@@ -846,8 +895,8 @@
     }
   }
 
-  function initialConversationId(conversationList: ConversationSummary[]) {
-    return conversationList[0]?.id ?? "";
+  function initialConversationId(_conversationList: ConversationSummary[]) {
+    return "";
   }
 
   async function refreshPeers() {
@@ -985,6 +1034,7 @@
       await sendNudge(activeConversation);
       statusText = "已发送抖一抖提醒";
       chatNotice = statusText;
+      nudgePulseKey += 1;
     } catch (error) {
       statusText = `抖一抖发送失败：${error instanceof Error ? error.message : String(error)}`;
       chatNotice = statusText;
@@ -1126,6 +1176,7 @@
     statusText = notice;
     if (event.conversation_id === activeConversation) {
       chatNotice = notice;
+      nudgePulseKey += 1;
     } else if (shouldNotifyConversation(event.conversation_id)) {
       notify("抖一抖提醒", notice, event.conversation_id);
     }
@@ -1392,9 +1443,11 @@
       id,
       title: `内网群聊 (${members.length})`,
       group_announcement: "",
+      group_owner_peer_id: self?.peer_id ?? "",
       last_message_at: Date.now(),
       last_message_preview: "",
       unread_count: 0,
+      manual_unread: false,
       pinned: false,
       muted: false,
       archived: false,
@@ -1423,6 +1476,10 @@
 
   async function saveActiveGroup() {
     if (!activeConversation.startsWith("group:")) return;
+    if (!activeGroupCanManage) {
+      statusText = "只有群创建者可以修改群资料和成员";
+      return;
+    }
     try {
       groupMemberDraftIds = filterUnblockedPeerIds(groupMemberDraftIds);
       const summary = await updateGroup(activeConversation, groupNameDraft, groupAnnouncementDraft, groupMemberDraftIds);
@@ -1493,6 +1550,26 @@
 
   function displayPeerName(peer: PeerProfile) {
     return contactMetadataFor(peer.peer_id).remark || peer.display_name;
+  }
+
+  function welcomeConversationPreview(conversation: ConversationSummary) {
+    const draft = conversation.draft_preview.trim();
+    if (draft) return `草稿：${draft}`;
+    const preview = conversation.last_message_preview.trim();
+    if (preview) return preview;
+    if (conversation.unread_count > 0) return `${conversation.unread_count} 条未读消息`;
+    return conversation.id.startsWith("group:") ? "群聊已创建，可以继续内网 fanout 沟通。" : "直连会话已准备好，可以发送第一条消息。";
+  }
+
+  function welcomeConversationTime(conversation: ConversationSummary) {
+    const value = conversation.last_message_at;
+    if (!value) return conversation.unread_count > 0 ? `${conversation.unread_count} 条未读` : "尚无历史消息";
+    const date = new Date(value);
+    const now = Date.now();
+    const time = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(date);
+    if (now - value < 24 * 60 * 60 * 1000) return `今天 ${time}`;
+    if (now - value < 48 * 60 * 60 * 1000) return `昨天 ${time}`;
+    return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
   }
 
   function errorMessage(error: unknown) {
@@ -1594,6 +1671,7 @@
     const saved = await updateAppPreferences(currentAppPreferences(patch));
     dark = saved.dark_mode;
     sendShortcut = saved.send_shortcut;
+    appShortcuts = saved.shortcuts;
     showNotificationPreview = saved.show_notification_preview;
     privacyMode = saved.privacy_mode;
     closeToTray = saved.close_to_tray;
@@ -1617,16 +1695,86 @@
     }
   }
 
-  async function toggleSendShortcutPreference() {
+  async function setSendShortcutPreference(nextShortcut: SendShortcut) {
     const previous = sendShortcut;
-    const nextShortcut: AppPreferences["send_shortcut"] = previous === "enter" ? "ctrl_enter" : "enter";
+    const previousShortcuts = appShortcuts;
     sendShortcut = nextShortcut;
+    appShortcuts = { ...appShortcuts, send_message: nextShortcut };
     try {
-      await saveAppPreferencesPatch({ send_shortcut: nextShortcut });
+      await saveAppPreferencesPatch({
+        send_shortcut: nextShortcut,
+        shortcuts: { ...appShortcuts, send_message: nextShortcut },
+      });
       statusText = `发送键已设置为${sendShortcut === "enter" ? "Enter" : "Ctrl+Enter"}`;
     } catch (error) {
       sendShortcut = previous;
+      appShortcuts = previousShortcuts;
       statusText = `发送键保存失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async function setScreenshotShortcutPreference(shortcut: ScreenshotShortcut) {
+    const previous = appShortcuts;
+    appShortcuts = { ...appShortcuts, screenshot: shortcut };
+    try {
+      const saved = await saveAppPreferencesPatch({ shortcuts: appShortcuts });
+      statusText = `截图快捷键已设置为${shortcutBindingLabel(saved.shortcuts.screenshot)}`;
+    } catch (error) {
+      appShortcuts = previous;
+      statusText = `截图快捷键保存失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async function setWindowShortcutPreference(shortcut: WindowShortcut) {
+    const previous = appShortcuts;
+    appShortcuts = { ...appShortcuts, toggle_window: shortcut };
+    try {
+      const saved = await saveAppPreferencesPatch({ shortcuts: appShortcuts });
+      statusText = `窗口快捷键已设置为${shortcutBindingLabel(saved.shortcuts.toggle_window)}`;
+    } catch (error) {
+      appShortcuts = previous;
+      statusText = `窗口快捷键保存失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  function shortcutBindingLabel(shortcut: AppShortcuts[keyof AppShortcuts]) {
+    switch (shortcut) {
+      case "enter":
+        return "Enter";
+      case "ctrl_enter":
+        return "Ctrl+Enter";
+      case "ctrl_alt_a":
+        return "Ctrl+Alt+A";
+      case "ctrl_shift_a":
+        return "Ctrl+Shift+A";
+      case "ctrl_alt_i":
+        return "Ctrl+Alt+I";
+      case "ctrl_shift_i":
+        return "Ctrl+Shift+I";
+      default:
+        return "关闭";
+    }
+  }
+
+  function matchesShortcut(event: KeyboardEvent, shortcut: ScreenshotShortcut | WindowShortcut) {
+    if (shortcut === "none") return false;
+    const key = event.key.toLowerCase();
+    if (shortcut === "ctrl_alt_a") return key === "a" && event.ctrlKey && event.altKey && !event.shiftKey;
+    if (shortcut === "ctrl_shift_a") return key === "a" && event.ctrlKey && event.shiftKey && !event.altKey;
+    if (shortcut === "ctrl_alt_i") return key === "i" && event.ctrlKey && event.altKey && !event.shiftKey;
+    return key === "i" && event.ctrlKey && event.shiftKey && !event.altKey;
+  }
+
+  function handleAppKeydown(event: KeyboardEvent) {
+    if (appLocked) return;
+    if (matchesShortcut(event, appShortcuts.screenshot)) {
+      event.preventDefault();
+      void startScreenshotWorkflow();
+      return;
+    }
+    if (matchesShortcut(event, appShortcuts.toggle_window)) {
+      event.preventDefault();
+      void minimizeWindowToTray();
     }
   }
 
@@ -1828,9 +1976,11 @@
       conversations.find((conversation) => conversation.id === conversationId) ?? {
         id: conversationId,
         title: peer.peer_id,
+        group_owner_peer_id: "",
         last_message_at: Date.now(),
         last_message_preview: "",
         unread_count: 0,
+        manual_unread: false,
         pinned: false,
         muted: false,
         archived: false,
@@ -2107,10 +2257,7 @@
     await toggleConversationArchived(conversationId);
   }
 
-  async function markMenuConversationRead() {
-    if (!conversationMenu) return;
-    const conversationId = conversationMenu.conversation.id;
-    conversationMenu = null;
+  async function markConversationReadById(conversationId: string) {
     try {
       await markConversationRead(conversationId);
       conversations = markConversationReadInList(conversations, conversationId);
@@ -2124,10 +2271,7 @@
     }
   }
 
-  async function markMenuConversationUnread() {
-    if (!conversationMenu) return;
-    const conversationId = conversationMenu.conversation.id;
-    conversationMenu = null;
+  async function markConversationUnreadById(conversationId: string) {
     try {
       await markConversationUnread(conversationId);
       conversations = markConversationUnreadInList(conversations, conversationId);
@@ -2135,6 +2279,20 @@
     } catch (error) {
       statusText = `标为未读失败：${error instanceof Error ? error.message : String(error)}`;
     }
+  }
+
+  async function markMenuConversationRead() {
+    if (!conversationMenu) return;
+    const conversationId = conversationMenu.conversation.id;
+    conversationMenu = null;
+    await markConversationReadById(conversationId);
+  }
+
+  async function markMenuConversationUnread() {
+    if (!conversationMenu) return;
+    const conversationId = conversationMenu.conversation.id;
+    conversationMenu = null;
+    await markConversationUnreadById(conversationId);
   }
 
   async function markEveryConversationRead() {
@@ -2761,6 +2919,12 @@
     statusText = "可在个人资料中设置头像文字";
   }
 
+  async function updateStatusFromAppMenu(status: PeerStatus) {
+    appMenu = null;
+    profileStatus = status;
+    await saveProfile();
+  }
+
   function openAppProfileMenu(event: MouseEvent) {
     event.preventDefault();
     event.stopPropagation();
@@ -2769,7 +2933,7 @@
     contactMenu = null;
     transferMenu = null;
     textEditMenu = null;
-    appMenu = clampContextMenuPosition(event, 230, 280);
+    appMenu = clampContextMenuPosition(event, 278, 360);
     focusContextMenuAfterRender();
   }
 
@@ -3682,14 +3846,17 @@
           last_message_at: Math.max(existing.last_message_at, message.created_at),
           last_message_preview:
             message.created_at >= existing.last_message_at ? lastMessagePreview : existing.last_message_preview,
-          unread_count: options.markRead ? 0 : existing.unread_count + (options.incrementUnread ? 1 : 0)
+          unread_count: options.markRead ? 0 : existing.unread_count + (options.incrementUnread ? 1 : 0),
+          manual_unread: options.markRead || options.incrementUnread ? false : existing.manual_unread
         }
       : {
           id: message.conversation_id,
           title: conversationTitleFor(message.conversation_id),
+          group_owner_peer_id: "",
           last_message_at: message.created_at,
           last_message_preview: lastMessagePreview,
           unread_count: options.incrementUnread ? 1 : 0,
+          manual_unread: false,
           pinned: false,
           muted: false,
           archived: false,
@@ -3713,9 +3880,11 @@
       {
         id: conversationId,
         title: conversationId,
+        group_owner_peer_id: "",
         last_message_at: 0,
         last_message_preview: "",
         unread_count: 0,
+        manual_unread: false,
         pinned: false,
         muted: false,
         archived: false,
@@ -3850,6 +4019,8 @@
   }
 </script>
 
+<svelte:window on:keydown={handleAppKeydown} />
+
 <main
   class:app-dark={dark}
   class:messages-layout={showMessageShell}
@@ -3901,6 +4072,8 @@
       {privacyMode}
       onSelectConversation={loadConversation}
       onOpenPeerDetails={openPeerDetails}
+      onSearchMessages={searchMessages}
+      onOpenMessageResult={openMessageResult}
       onRefreshPeers={refreshPeers}
       onMarkAllRead={markEveryConversationRead}
       onConversationContext={openConversationContextMenu}
@@ -3931,6 +4104,7 @@
       {pendingFileDrafts}
       {replyQuote}
       {conversationSearchOpen}
+      {nudgePulseKey}
       {conversationSearchFocus}
       {conversationSearchQuery}
       {conversationSearchDate}
@@ -3969,6 +4143,8 @@
       onOpenTransfer={openTransfer}
       onCopyAttachmentFiles={copyAttachmentFiles}
       onRetryMessage={resendMessage}
+      onMarkConversationRead={() => markConversationReadById(activeConversation)}
+      onMarkConversationUnread={() => markConversationUnreadById(activeConversation)}
       onTogglePin={() => toggleConversationPinned(activeConversation)}
       onToggleMute={() => toggleConversationMuted(activeConversation)}
       onToggleArchive={() => toggleConversationArchived(activeConversation)}
@@ -4049,12 +4225,43 @@
               </span>
             </div>
           </div>
-          <div class="welcome-status-strip" aria-label="当前概览">
-            <span><b>{reachablePeerCount}</b> 可联系</span>
-            <span><b>{conversations.length}</b> 会话</span>
-            <span><b>{pendingOutboxCount + totalUnreadCount}</b> 待处理</span>
-          </div>
-          <div class="welcome-route-grid" aria-label="快速入口">
+	          <div class="welcome-status-strip" aria-label="当前概览">
+	            <span><b>{reachablePeerCount}</b> 可联系</span>
+	            <span><b>{conversations.length}</b> 会话</span>
+	            <span><b>{pendingOutboxCount + totalUnreadCount}</b> 待处理</span>
+	          </div>
+	          <section class="welcome-recent-card" aria-label="最近消息">
+	            {#if welcomeRecentConversation}
+	              <button type="button" on:click={() => loadConversation(welcomeRecentConversation?.id ?? "")}>
+	                <span class="welcome-recent-icon">
+	                  <MessageSquareText size={18} />
+	                </span>
+	                <span class="welcome-recent-copy">
+	                  <small>最近消息</small>
+	                  <strong>{welcomeRecentTitle}</strong>
+	                  <em>{welcomeRecentPreview}</em>
+	                </span>
+	                <span class="welcome-recent-meta">
+	                  <time>{welcomeRecentTime}</time>
+	                  {#if welcomeRecentConversation.unread_count > 0}
+	                    <b>{welcomeRecentConversation.unread_count > 99 ? "99+" : welcomeRecentConversation.unread_count}</b>
+	                  {/if}
+	                </span>
+	              </button>
+	            {:else}
+	              <div>
+	                <span class="welcome-recent-icon">
+	                  <MessageSquareText size={18} />
+	                </span>
+	                <span class="welcome-recent-copy">
+	                  <small>最近消息</small>
+	                  <strong>等待第一条内网消息</strong>
+	                  <em>发现设备后可直接开聊，文件与图片也会出现在这里。</em>
+	                </span>
+	              </div>
+	            {/if}
+	          </section>
+	          <div class="welcome-route-grid" aria-label="快速入口">
             <button type="button" on:click={() => (activeSection = "contacts")}>
               <UserRound size={15} />
               <span>
@@ -4146,6 +4353,7 @@
       {notificationReady}
       {dark}
       {sendShortcut}
+      shortcuts={appShortcuts}
       {showNotificationPreview}
       {privacyMode}
       {closeToTray}
@@ -4193,7 +4401,9 @@
       onEnableNotifications={enableNotifications}
       onMinimizeToTray={minimizeWindowToTray}
       onToggleTheme={toggleThemePreference}
-      onToggleSendShortcut={toggleSendShortcutPreference}
+      onSetSendShortcut={setSendShortcutPreference}
+      onSetScreenshotShortcut={setScreenshotShortcutPreference}
+      onSetWindowShortcut={setWindowShortcutPreference}
       onToggleNotificationPreview={toggleNotificationPreviewPreference}
       onTogglePrivacyMode={togglePrivacyModePreference}
       onToggleCloseToTray={toggleCloseToTrayPreference}
@@ -4219,7 +4429,6 @@
       onTransferContext={openTransferContextMenu}
       onClearCompletedTransfers={clearFinishedTransfers}
       onCopyTransferId={copyStoragePath}
-      onCopyTransferDiagnostics={copyTransferDiagnostics}
     />
   {/if}
 
@@ -4238,6 +4447,7 @@
     {groupNameDraft}
     {groupAnnouncementDraft}
     {groupMemberDraftIds}
+    canManageGroup={activeGroupCanManage}
     {transferTasks}
     {storageOverview}
     {networkWarning}
@@ -4603,9 +4813,25 @@
         <span class="profile-menu-avatar">{railAvatarLabel}</span>
         <div>
           <strong>{displaySelfName}</strong>
-          <small>{profileSignature || self?.hostname || "内网直连已就绪"}</small>
+          <small>{profileSignature || "内网直连已就绪"}</small>
+          <em>{self?.hostname || "本机设备"} · {self?.endpoints[0] || `${transportConfig.listen_port}/QUIC`}</em>
         </div>
         <span class={`profile-menu-status ${profileStatus}`}>{profileStatusText}</span>
+      </div>
+      <div class="profile-menu-status-grid" role="group" aria-label="切换在线状态">
+        {#each profileMenuStatusChoices as choice (choice.value)}
+          <button
+            class:active={profileStatus === choice.value}
+            class="profile-menu-status-choice"
+            type="button"
+            role="menuitemradio"
+            aria-checked={profileStatus === choice.value}
+            on:click={() => updateStatusFromAppMenu(choice.value)}
+          >
+            <span class={`presence-dot ${choice.tone}`}></span>
+            {choice.label}
+          </button>
+        {/each}
       </div>
       <button type="button" role="menuitem" on:click={openSignatureFromAppMenu}>
         <FileText size={13} />
