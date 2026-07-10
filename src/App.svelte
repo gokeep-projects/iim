@@ -1282,6 +1282,15 @@
     conversationSearchOpen = true;
   }
 
+  async function openSidebarConversationSearch() {
+    const targetConversationId = activeConversation || welcomeRecentConversation?.id || conversations.find((conversation) => !conversation.archived)?.id || conversations[0]?.id || "";
+    if (targetConversationId && targetConversationId !== activeConversation) {
+      await loadConversation(targetConversationId);
+    }
+    conversationSearchFocus = "query";
+    conversationSearchOpen = Boolean(targetConversationId);
+  }
+
   function clearConversationSearchState() {
     conversationSearchQuery = "";
     conversationSearchDate = "";
@@ -4074,6 +4083,7 @@
       onOpenPeerDetails={openPeerDetails}
       onSearchMessages={searchMessages}
       onOpenMessageResult={openMessageResult}
+      onOpenConversationSearch={openSidebarConversationSearch}
       onRefreshPeers={refreshPeers}
       onMarkAllRead={markEveryConversationRead}
       onConversationContext={openConversationContextMenu}

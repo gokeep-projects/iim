@@ -715,6 +715,29 @@ describe("WorkspacePanel settings", () => {
     expect(openSettingsTab).toHaveBeenCalledWith("security");
   });
 
+  it("navigates settings categories with arrow and boundary keys", async () => {
+    const openSettingsTab = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "profile",
+        onOpenSettingsTab: openSettingsTab,
+      },
+    });
+
+    const profileTab = screen.getByRole("button", { name: "个人" });
+    expect(profileTab).toHaveAttribute("aria-current", "page");
+
+    await fireEvent.keyDown(profileTab, { key: "ArrowDown" });
+    expect(openSettingsTab).toHaveBeenLastCalledWith("network");
+    expect(screen.getByRole("button", { name: "网络" })).toHaveAttribute("aria-current", "page");
+
+    await fireEvent.keyDown(screen.getByRole("button", { name: "网络" }), { key: "End" });
+    expect(openSettingsTab).toHaveBeenLastCalledWith("preferences");
+    expect(screen.getByRole("button", { name: "偏好" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("offers copy actions for local identity verification values", async () => {
     const copyIdentityValue = vi.fn();
     render(WorkspacePanel, {

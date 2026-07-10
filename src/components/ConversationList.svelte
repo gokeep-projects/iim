@@ -1,9 +1,11 @@
 ﻿<script lang="ts">
+  import { tick } from "svelte";
   import Archive from "lucide-svelte/icons/archive";
   import AtSign from "lucide-svelte/icons/at-sign";
   import BellOff from "lucide-svelte/icons/bell-off";
   import CheckCheck from "lucide-svelte/icons/check-check";
   import CheckSquare from "lucide-svelte/icons/check-square";
+  import History from "lucide-svelte/icons/history";
   import Search from "lucide-svelte/icons/search";
   import MessageSquare from "lucide-svelte/icons/message-square";
   import RefreshCw from "lucide-svelte/icons/refresh-cw";
@@ -32,6 +34,7 @@
   export let onOpenPeerDetails: (peer: PeerProfile) => void = () => {};
   export let onSearchMessages: (query: string) => Promise<ChatMessage[]> = async () => [];
   export let onOpenMessageResult: (message: ChatMessage) => void | Promise<void> = () => {};
+  export let onOpenConversationSearch: () => void | Promise<void> = () => {};
 
   type ColumnMode = "conversations" | "contacts";
   type SidebarSearchSuggestion =
@@ -66,10 +69,12 @@
   let refreshing = false;
   let sidebarSearchQuery = "";
   let sidebarSearchOpen = false;
+  let sidebarSearchExpanded = false;
   let sidebarSearchActiveIndex = 0;
   let sidebarMessageResults: ChatMessage[] = [];
   let sidebarSearchLoading = false;
   let sidebarSearchToken = 0;
+  let sidebarSearchInputElement: HTMLInputElement | null = null;
 
   $: filteredConversations = conversations.filter((conversation) => !conversation.archived);
   $: visibleConversations = filteredConversations.sort(conversationPrioritySort);
@@ -299,6 +304,7 @@
 
   async function selectSidebarSearchSuggestion(suggestion: SidebarSearchSuggestion) {
     sidebarSearchOpen = false;
+    sidebarSearchExpanded = false;
     sidebarSearchQuery = "";
     sidebarMessageResults = [];
     sidebarSearchActiveIndex = 0;
@@ -327,8 +333,27 @@
       await selectSidebarSearchSuggestion(suggestion);
     } else if (event.key === "Escape") {
       sidebarSearchOpen = false;
+      if (!sidebarSearchQuery.trim()) sidebarSearchExpanded = false;
     }
   }
+
+  async function openSidebarSearch() {
+    sidebarSearchExpanded = true;
+    sidebarSearchOpen = Boolean(sidebarSearchQuery.trim());
+    await tick();
+    sidebarSearchInputElement?.focus();
+    sidebarSearchInputElement?.select();
+  }
+
+  function blurSidebarSearch() {
+    window.setTimeout(() => {
+      sidebarSearchOpen = false;
+      if (!sidebarSearchQuery.trim()) {
+        sidebarSearchExpanded = false;
+      }
+    }, 120);
+  }
+
 
   function delay(milliseconds: number) {
     return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
@@ -430,52 +455,66 @@
     </button>
   </div>
 
-  <div class="search-shell sidebar-global-search">
-    <label class="search-box">
+  <div class="sidebar-search-actions" aria-label="消息快捷检索">
+    <button class:active={sidebarSearchExpanded} type="button" on:click={openSidebarSearch} title="搜索联系人、会话、聊天记录">
       <Search size={14} />
-      <input
-        aria-controls="sidebar-search-suggestions"
-        aria-expanded={sidebarSearchOpen && sidebarSearchNeedle ? "true" : "false"}
-        aria-label="搜索联系人、会话、聊天记录"
-        autocomplete="off"
-        placeholder="搜索联系人、会话、聊天记录"
-        role="combobox"
-        value={sidebarSearchQuery}
-        on:blur={() => window.setTimeout(() => (sidebarSearchOpen = false), 120)}
-        on:focus={() => (sidebarSearchOpen = Boolean(sidebarSearchQuery.trim()))}
-        on:input={(event) => void updateSidebarSearch((event.currentTarget as HTMLInputElement).value)}
-        on:keydown={handleSidebarSearchKeydown}
-      />
-      {#if sidebarSearchLoading}<span class="search-loading">检索中</span>{/if}
-    </label>
-    {#if sidebarSearchOpen && sidebarSearchNeedle}
-      <div id="sidebar-search-suggestions" class="search-suggestions sidebar-search-suggestions" role="listbox" aria-label="搜索建议">
-        {#each sidebarSearchSuggestions as suggestion, index (suggestion.id)}
-          <button
-            class:active={index === sidebarSearchActiveIndex}
-            type="button"
-            role="option"
-            aria-selected={index === sidebarSearchActiveIndex}
-            on:mouseenter={() => (sidebarSearchActiveIndex = index)}
-            on:mousedown|preventDefault
-            on:click={() => selectSidebarSearchSuggestion(suggestion)}
-          >
-            <span class={`suggestion-kind ${suggestion.kind}`}>{suggestion.kindLabel}</span>
-            <span class="suggestion-copy">
-              <strong>{suggestion.title}</strong>
-              <small>{suggestion.subtitle}</small>
-            </span>
-            <span class="suggestion-meta">{suggestion.meta}</span>
-          </button>
-        {:else}
-          <div class="search-empty" role="status">
-            <strong>没有匹配结果</strong>
-            <span>可输入用户名、主机名、IP 地址或聊天内容。</span>
-          </div>
-        {/each}
-      </div>
-    {/if}
+      <span>找人/搜索</span>
+    </button>
+    <button type="button" on:click={onOpenConversationSearch} title="查询当前会话聊天记录" disabled={!activeConversation && visibleConversations.length === 0}>
+      <History size={14} />
+      <span>聊天记录</span>
+    </button>
   </div>
+
+  {#if sidebarSearchExpanded || sidebarSearchQuery}
+    <div class="search-shell sidebar-global-search sidebar-search-panel">
+      <label class="search-box">
+        <Search size={14} />
+        <input
+          bind:this={sidebarSearchInputElement}
+          aria-controls="sidebar-search-suggestions"
+          aria-expanded={sidebarSearchOpen && sidebarSearchNeedle ? "true" : "false"}
+          aria-label="搜索联系人、会话、聊天记录"
+          autocomplete="off"
+          placeholder="用户名、主机名、IP 或聊天内容"
+          role="combobox"
+          value={sidebarSearchQuery}
+          on:blur={blurSidebarSearch}
+          on:focus={() => (sidebarSearchOpen = Boolean(sidebarSearchQuery.trim()))}
+          on:input={(event) => void updateSidebarSearch((event.currentTarget as HTMLInputElement).value)}
+          on:keydown={handleSidebarSearchKeydown}
+        />
+        {#if sidebarSearchLoading}<span class="search-loading">检索中</span>{/if}
+      </label>
+      {#if sidebarSearchOpen && sidebarSearchNeedle}
+        <div id="sidebar-search-suggestions" class="search-suggestions sidebar-search-suggestions" role="listbox" aria-label="搜索建议">
+          {#each sidebarSearchSuggestions as suggestion, index (suggestion.id)}
+            <button
+              class:active={index === sidebarSearchActiveIndex}
+              type="button"
+              role="option"
+              aria-selected={index === sidebarSearchActiveIndex}
+              on:mouseenter={() => (sidebarSearchActiveIndex = index)}
+              on:mousedown|preventDefault
+              on:click={() => selectSidebarSearchSuggestion(suggestion)}
+            >
+              <span class={`suggestion-kind ${suggestion.kind}`}>{suggestion.kindLabel}</span>
+              <span class="suggestion-copy">
+                <strong>{suggestion.title}</strong>
+                <small>{suggestion.subtitle}</small>
+              </span>
+              <span class="suggestion-meta">{suggestion.meta}</span>
+            </button>
+          {:else}
+            <div class="search-empty" role="status">
+              <strong>没有匹配结果</strong>
+              <span>可输入用户名、主机名、IP 地址或聊天内容。</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   {#if columnMode === "conversations"}
   <div class="column-page conversation-page">

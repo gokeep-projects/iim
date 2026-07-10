@@ -1162,6 +1162,15 @@
             <span>{selectionPreview(message)}</span>
           </label>
         {/if}
+        {#if !messageSelectionMode}
+          <div class="message-avatar" aria-hidden="true">
+            {senderLabel(message.sender_id).trim().slice(0, 1).toUpperCase() || "?"}
+          </div>
+        {/if}
+        <div class="message-stack">
+          {#if !message.recalled && shouldShowSenderLabel(message)}
+            <header class="message-author">{senderLabel(message.sender_id)}</header>
+          {/if}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
         <article
           class:mine={message.sender_id === selfPeerId}
@@ -1178,9 +1187,6 @@
             <p class="recalled-copy">{message.sender_id === selfPeerId ? "你撤回了一条消息" : "对方撤回了一条消息"}</p>
           {:else}
             {@const linkPreview = firstLinkPreview(message.body)}
-            {#if shouldShowSenderLabel(message)}
-              <header class="message-author">{senderLabel(message.sender_id)}</header>
-            {/if}
             {#if message.quote}
               <blockquote class="message-quote">
                 <strong>{senderLabel(message.quote.sender_id)}</strong>
@@ -1322,7 +1328,10 @@
                 {/each}
               </div>
             {/if}
-            <footer>
+          {/if}
+        </article>
+          {#if !message.recalled}
+            <footer class="message-meta">
               <span>{formatTime(message.created_at)}</span>
               {#if message.favorited}<span class="favorite-mark"><Star size={12} /> 收藏</span>{/if}
               {#if todoMessageIdSet.has(message.id)}<span class="todo-mark"><CheckSquare size={12} /> 待办</span>{/if}
@@ -1342,7 +1351,7 @@
               {/if}
             </footer>
           {/if}
-        </article>
+        </div>
       </div>
     {:else}
       {#if conversation}

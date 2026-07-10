@@ -145,6 +145,7 @@
   let transferStatusFilter: TransferStatusFilter = "all";
   let trustedDeviceQuery = "";
   let networkDiagnosticsRefreshing = false;
+  let storageRefreshing = false;
 
   const settingsTabs: Array<{ id: SettingsTab; label: string; icon: typeof Users }> = [
     { id: "profile", label: "个人", icon: Users },
@@ -201,6 +202,24 @@
   function openSettingsCategory(tab: SettingsTab) {
     settingsTab = tab;
     onOpenSettingsTab(tab);
+  }
+
+  function handleSettingsNavigation(event: KeyboardEvent, currentIndex: number) {
+    const lastIndex = settingsTabs.length - 1;
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") nextIndex = Math.min(currentIndex + 1, lastIndex);
+    else if (event.key === "ArrowUp" || event.key === "ArrowLeft") nextIndex = Math.max(currentIndex - 1, 0);
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = lastIndex;
+    else return;
+
+    event.preventDefault();
+    const nextTab = settingsTabs[nextIndex];
+    openSettingsCategory(nextTab.id);
+    const navigation = (event.currentTarget as HTMLButtonElement).closest(".settings-nav");
+    window.setTimeout(() => {
+      navigation?.querySelector<HTMLButtonElement>(`[data-settings-tab="${nextTab.id}"]`)?.focus();
+    }, 0);
   }
 
   function formatTrustTime(seconds: number) {
@@ -584,9 +603,25 @@
     if (networkDiagnosticsRefreshing) return;
     networkDiagnosticsRefreshing = true;
     try {
-      await onRefreshPeers();
+      await Promise.all([
+        Promise.resolve(onRefreshPeers()),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 720))
+      ]);
     } finally {
       networkDiagnosticsRefreshing = false;
+    }
+  }
+
+  async function refreshStorageOverview() {
+    if (storageRefreshing) return;
+    storageRefreshing = true;
+    try {
+      await Promise.all([
+        Promise.resolve(onRefreshStorage()),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 720))
+      ]);
+    } finally {
+      storageRefreshing = false;
     }
   }
 
@@ -1278,8 +1313,15 @@
 
     <div class="settings-shell">
       <nav class="settings-nav" aria-label="设置分类">
-        {#each settingsTabs as item}
-          <button class:active={settingsTab === item.id} type="button" on:click={() => openSettingsCategory(item.id)}>
+        {#each settingsTabs as item, index}
+          <button
+            class:active={settingsTab === item.id}
+            type="button"
+            data-settings-tab={item.id}
+            aria-current={settingsTab === item.id ? "page" : undefined}
+            on:click={() => openSettingsCategory(item.id)}
+            on:keydown={(event) => handleSettingsNavigation(event, index)}
+          >
             <svelte:component this={item.icon} size={15} />
             {item.label}
           </button>
@@ -1618,11 +1660,19 @@
 	              <span>刷新状态或复制诊断信息；目录迁移使用上方的迁移卡完成。</span>
 	            </header>
 	            <div class="settings-action-grid">
-	              <button class="action-card" type="button" aria-label="刷新存储信息" on:click={onRefreshStorage}>
+	              <button
+                    class:loading={storageRefreshing}
+                    class="action-card refresh-action"
+                    type="button"
+                    aria-label="刷新存储信息"
+                    aria-busy={storageRefreshing}
+                    disabled={storageRefreshing}
+                    on:click={refreshStorageOverview}
+                  >
 	                <RefreshCw size={16} />
 	                <span>
-                  <strong>刷新存储信息</strong>
-	                  <small>重新读取数据库、缓存和目录占用</small>
+	                  <strong>{storageRefreshing ? "正在刷新" : "刷新存储信息"}</strong>
+	                  <small>{storageRefreshing ? "正在重新读取本地占用" : "重新读取数据库、缓存和目录占用"}</small>
 	                </span>
 	              </button>
 	              <button class="action-card" type="button" aria-label="复制存储诊断报告" on:click={() => onCopyStorageDiagnostics(storageDiagnosticReport())}>
@@ -1884,14 +1934,14 @@
                   <small>{notificationReady ? "重新检查桌面通知权限" : "允许收到新消息和文件提醒"}</small>
                 </span>
               </button>
-              <button class:enabled={showNotificationPreview && !privacyMode} class="preference-toggle" type="button" aria-label={privacyMode ? "隐私模式已隐藏通知内容" : showNotificationPreview ? "隐藏通知消息内容" : "显示通知消息内容"} on:click={onToggleNotificationPreview}>
+              <button class:enabled={showNotificationPreview && !privacyMode} class="preference-toggle" type="button" aria-pressed={showNotificationPreview && !privacyMode} aria-label={privacyMode ? "隐私模式已隐藏通知内容" : showNotificationPreview ? "隐藏通知消息内容" : "显示通知消息内容"} on:click={onToggleNotificationPreview}>
                 <Bell size={16} />
                 <span>
                   <strong>通知预览</strong>
                   <small>{privacyMode ? "隐私模式接管" : showNotificationPreview ? "显示消息摘要" : "隐藏消息摘要"}</small>
                 </span>
               </button>
-              <button class:enabled={privacyMode} class="preference-toggle" type="button" aria-label={privacyMode ? "关闭隐私模式" : "开启隐私模式"} on:click={onTogglePrivacyMode}>
+              <button class:enabled={privacyMode} class="preference-toggle" type="button" aria-pressed={privacyMode} aria-label={privacyMode ? "关闭隐私模式" : "开启隐私模式"} on:click={onTogglePrivacyMode}>
                 <ShieldCheck size={16} />
                 <span>
                   <strong>隐私模式</strong>
@@ -1906,14 +1956,14 @@
               <span>窗口行为和主题放在一起，保留常驻桌面 IM 的核心控制。</span>
             </header>
             <div class="settings-action-grid">
-              <button class:enabled={closeToTray} class="preference-toggle" type="button" aria-label={closeToTray ? "关闭按钮改为关闭窗口" : "关闭按钮隐藏到托盘"} on:click={onToggleCloseToTray}>
+              <button class:enabled={closeToTray} class="preference-toggle" type="button" aria-pressed={closeToTray} aria-label={closeToTray ? "关闭按钮改为关闭窗口" : "关闭按钮隐藏到托盘"} on:click={onToggleCloseToTray}>
                 <Minimize2 size={16} />
                 <span>
                   <strong>关闭按钮</strong>
                   <small>{closeToTray ? "隐藏到托盘" : "关闭窗口"}</small>
                 </span>
               </button>
-              <button class:enabled={dark} class="preference-toggle" type="button" aria-label={dark ? "切换浅色主题" : "切换深色主题"} on:click={onToggleTheme}>
+              <button class:enabled={dark} class="preference-toggle" type="button" aria-pressed={dark} aria-label={dark ? "切换浅色主题" : "切换深色主题"} on:click={onToggleTheme}>
                 <Palette size={16} />
                 <span>
                   <strong>主题</strong>
@@ -1935,7 +1985,7 @@
               <span>默认无需登录；启用后，下次启动会先要求输入本机密码。</span>
             </header>
             <div class="login-preference-layout">
-              <button class:enabled={loginEnabled} class="preference-toggle login-toggle" type="button" aria-label={loginEnabled ? "关闭登录密码" : "启用登录密码"} on:click={() => onLoginEnabledChange(!loginEnabled)}>
+              <button class:enabled={loginEnabled} class="preference-toggle login-toggle" type="button" aria-pressed={loginEnabled} aria-label={loginEnabled ? "关闭登录密码" : "启用登录密码"} on:click={() => onLoginEnabledChange(!loginEnabled)}>
                 <ShieldCheck size={16} />
                 <span>
                   <strong>登录密码</strong>

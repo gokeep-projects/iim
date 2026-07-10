@@ -122,8 +122,16 @@ const tauriInvoke = vi.hoisted(() =>
   }),
 );
 const defaultTauriInvoke = tauriInvoke.getMockImplementation()!;
-async function waitForInitialConversationLoad() {
-  await screen.findByRole("region", { name: /聊天工作区|空会话/ });
+async function waitForInitialConversationLoad(options: { openConversation?: boolean } = {}) {
+  const shell = await screen.findByRole("region", { name: /聊天工作区|空会话/ });
+  if (options.openConversation !== false && shell.getAttribute("aria-label") === "空会话") {
+    const recent = screen.queryByRole("region", { name: "最近消息" });
+    const recentButton = recent ? within(recent).queryByRole("button") : null;
+    if (recentButton) {
+      await fireEvent.click(recentButton);
+      await screen.findByRole("region", { name: "聊天工作区" });
+    }
+  }
   await Promise.resolve();
 }
 
@@ -351,7 +359,8 @@ describe("App", () => {
     });
     await fireEvent.click(within(unlock).getByRole("button", { name: "解锁进入" }));
 
-    expect(await screen.findByRole("region", { name: "聊天工作区" })).toBeInTheDocument();
+    await waitForInitialConversationLoad();
+    expect(screen.getByRole("region", { name: "聊天工作区" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "登录解锁" })).not.toBeInTheDocument();
   });
 
@@ -449,7 +458,7 @@ describe("App", () => {
     expect(await screen.findByRole("status", { name: "启动进度" })).toBeInTheDocument();
 
     resolveProfile(await defaultTauriInvoke("get_self_profile"));
-    await waitForInitialConversationLoad();
+    await waitForInitialConversationLoad({ openConversation: false });
   });
 
   it("seeds preview conversations and contacts in an empty Tauri workspace", async () => {
@@ -464,7 +473,7 @@ describe("App", () => {
     });
 
     render(App);
-    await waitForInitialConversationLoad();
+    await waitForInitialConversationLoad({ openConversation: false });
 
 	    expect(screen.getByRole("region", { name: "空会话" })).toBeInTheDocument();
 	    const recent = screen.getByRole("region", { name: "最近消息" });
@@ -501,7 +510,7 @@ describe("App", () => {
     });
 
     render(App);
-    await waitForInitialConversationLoad();
+    await waitForInitialConversationLoad({ openConversation: false });
 
 	    expect(screen.getByRole("region", { name: "空会话" })).toBeInTheDocument();
 	    expect(screen.queryByRole("toolbar", { name: "消息工具栏" })).not.toBeInTheDocument();

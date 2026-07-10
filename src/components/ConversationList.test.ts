@@ -202,14 +202,16 @@ describe("ConversationList filters", () => {
     expect(button).not.toHaveClass("refreshing");
   });
 
-  it("shows a compact global search box for conversations, contacts, and records", () => {
+  it("opens a compact global search box for conversations, contacts, and records", async () => {
     render(ConversationList, {
       props: {
         conversations,
       },
     });
 
-    expect(screen.getByPlaceholderText("搜索联系人、会话、聊天记录")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("用户名、主机名、IP 或聊天内容")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "找人/搜索" }));
+    expect(screen.getByPlaceholderText("用户名、主机名、IP 或聊天内容")).toBeInTheDocument();
     expect(screen.queryByRole("listbox", { name: "搜索建议" })).not.toBeInTheDocument();
   });
 
@@ -667,7 +669,8 @@ describe("ConversationList filters", () => {
       },
     });
 
-    const input = screen.getByPlaceholderText("搜索联系人、会话、聊天记录");
+    await fireEvent.click(screen.getByRole("button", { name: "找人/搜索" }));
+    const input = screen.getByPlaceholderText("用户名、主机名、IP 或聊天内容");
     await fireEvent.input(input, { target: { value: "ops" } });
 
     const suggestions = await screen.findByRole("listbox", { name: "搜索建议" });
