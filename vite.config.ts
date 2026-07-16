@@ -14,9 +14,28 @@ export default defineConfig({
     }
   },
   envPrefix: ["VITE_", "TAURI_"],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/lucide-svelte")) return "icons";
+          if (id.includes("node_modules/@tauri-apps/plugin-dialog")) return "dialog";
+          if (id.includes("node_modules/@tauri-apps")) return "tauri";
+          if (id.includes("node_modules/svelte")) return "svelte";
+        }
+      }
+    }
+  },
   test: {
     environment: "jsdom",
     globals: true,
-    setupFiles: "./src/test/setup.ts"
+    setupFiles: "./src/test/setup.ts",
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        maxForks: 2,
+        minForks: 1
+      }
+    }
   }
 });

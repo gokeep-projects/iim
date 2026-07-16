@@ -19,7 +19,7 @@ use quinn::rustls::{
 pub const DEFAULT_HEARTBEAT_SECS: u64 = 15;
 pub const DEFAULT_MAX_IDLE_TIMEOUT_SECS: u64 = 60;
 pub const DEFAULT_OUTBOX_RETRY_AFTER_MILLIS: i64 = 10_000;
-pub const DEFAULT_OUTBOX_MAX_ATTEMPTS: u32 = 12;
+pub const DEFAULT_OUTBOX_MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_OUTBOX_BATCH_LIMIT: u32 = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +55,7 @@ impl OutboxDeliveryPolicy {
     }
 
     pub fn max_attempts(self) -> u32 {
-        self.max_attempts.max(1)
+        self.max_attempts.clamp(1, DEFAULT_OUTBOX_MAX_ATTEMPTS)
     }
 
     pub fn batch_limit(self) -> u32 {

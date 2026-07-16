@@ -44,7 +44,7 @@ describe("App", () => {
   it("renders the redesigned Svelte LAN messenger shell", async () => {
     render(App);
 
-    expect(await screen.findByText("灵犀内网通")).toBeInTheDocument();
+    expect(await screen.findByText("iim")).toBeInTheDocument();
     expect(await screen.findByPlaceholderText("搜索会话、联系人、聊天记录")).toBeInTheDocument();
     expect(await screen.findByText("消息")).toBeInTheDocument();
     expect(await screen.findByText("在线联系人")).toBeInTheDocument();

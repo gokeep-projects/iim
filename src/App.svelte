@@ -2,30 +2,33 @@
   import { onMount, tick } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { open, save } from "@tauri-apps/plugin-dialog";
   import { isPermissionGranted, onAction, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
   import Rail, { type Section } from "./components/Rail.svelte";
   import ConversationList from "./components/ConversationList.svelte";
   import ChatWorkspace from "./components/ChatWorkspace.svelte";
   import Inspector from "./components/Inspector.svelte";
   import WorkspacePanel from "./components/WorkspacePanel.svelte";
-  import Archive from "lucide-svelte/icons/archive";
   import Ban from "lucide-svelte/icons/ban";
   import BellOff from "lucide-svelte/icons/bell-off";
   import CheckCheck from "lucide-svelte/icons/check-check";
   import CheckCircle2 from "lucide-svelte/icons/check-circle-2";
   import CheckSquare from "lucide-svelte/icons/check-square";
+  import ChevronLeft from "lucide-svelte/icons/chevron-left";
   import Copy from "lucide-svelte/icons/copy";
   import FileText from "lucide-svelte/icons/file-text";
   import HardDrive from "lucide-svelte/icons/hard-drive";
   import Info from "lucide-svelte/icons/info";
+  import Maximize2 from "lucide-svelte/icons/maximize-2";
   import MessageSquareText from "lucide-svelte/icons/message-square-text";
+  import Minus from "lucide-svelte/icons/minus";
   import Minimize2 from "lucide-svelte/icons/minimize-2";
-  import Palette from "lucide-svelte/icons/palette";
+  import MoreHorizontal from "lucide-svelte/icons/more-horizontal";
   import Pin from "lucide-svelte/icons/pin";
   import PinOff from "lucide-svelte/icons/pin-off";
   import RefreshCw from "lucide-svelte/icons/refresh-cw";
   import Reply from "lucide-svelte/icons/reply";
+  import Search from "lucide-svelte/icons/search";
+  import Square from "lucide-svelte/icons/square";
   import Scissors from "lucide-svelte/icons/scissors";
   import Send from "lucide-svelte/icons/send";
   import Settings from "lucide-svelte/icons/settings";
@@ -34,6 +37,7 @@
   import Trash2 from "lucide-svelte/icons/trash-2";
   import UploadCloud from "lucide-svelte/icons/upload-cloud";
   import UserRound from "lucide-svelte/icons/user-round";
+  import Users from "lucide-svelte/icons/users";
   import Volume2 from "lucide-svelte/icons/volume-2";
   import X from "lucide-svelte/icons/x";
   import {
@@ -56,7 +60,7 @@
   } from "./editableText";
   import { groupFileTransferBlockReason, incomingConversationPolicy, outgoingConversationBlockReason } from "./conversationPolicy";
   import { removeTypingIndicatorsForPeer, typingIndicatorKeysForPeer } from "./typingState";
-  import { replaceMessageInList, syncFavoriteMessageList, syncOutboxMessageList, syncPinnedMessageList, syncTodoMessageList, upsertMessageInList } from "./messageCollections";
+  import { replaceMessageInList, syncOutboxMessageList, syncPinnedMessageList, syncTodoMessageList, upsertMessageInList } from "./messageCollections";
   import {
     type ChatMessage,
     type AppPreferences,
@@ -99,7 +103,6 @@
     getTransportConfig,
     listContactMetadata,
     listConversations,
-    listConversationMessagesBetween,
     listGroupMembers,
     listMessages,
     listMessageDeliveryReceipts,
@@ -120,7 +123,6 @@
     getConversationDraft,
     getAppPreferences,
     saveConversationDraft,
-    listFavoriteMessages,
     listPinnedMessages,
     listTodoMessages,
     listTrustedPeers,
@@ -130,7 +132,6 @@
     setMessagePin,
     setMessageTodo,
     setMessageReaction,
-    searchMessages,
     searchConversationMessages,
     sendFiles,
     sendNudge,
@@ -150,6 +151,18 @@
   import { validateNetworkInputs, validateNetworkTiming } from "./networkValidation";
   import { messageMentionsSelf } from "./messageMentions";
 
+  type DialogModule = typeof import("@tauri-apps/plugin-dialog");
+
+  async function openDialog(options: Parameters<DialogModule["open"]>[0]) {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    return dialog.open(options);
+  }
+
+  async function saveDialog(options: Parameters<DialogModule["save"]>[0]) {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    return dialog.save(options);
+  }
+
   type InspectorTab = "details" | "transfers" | "network" | "security" | "members" | "storage";
   type SettingsTab = "profile" | "network" | "storage" | "security" | "preferences";
   type TypingIndicator = TypingEvent & { expires_at: number };
@@ -157,6 +170,7 @@
     x: number;
     y: number;
     message: ChatMessage;
+    page: "primary" | "more";
   };
   type ConversationMenuState = {
     x: number;
@@ -199,7 +213,6 @@
     peer_ttl_secs: 15
   };
 
-  const quickReplies = ["收到", "稍后处理", "请发一下文件", "我这边已完成"];
   const quickReactions = ["👍", "❤️", "😂", "👌"];
   const settingsTabs: SettingsTab[] = ["profile", "network", "storage", "security", "preferences"];
   const screenshotNotice = "已启动系统截图，完成后可直接粘贴到聊天框发送。";
@@ -226,14 +239,165 @@
     fingerprint: "e".repeat(64),
     public_key: Array(32).fill(14)
   };
+  const previewDesignPeer: PeerProfile = {
+    peer_id: "demo-design",
+    display_name: "设计三号",
+    hostname: "design-studio",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.66:24251"],
+    fingerprint: "6".repeat(64),
+    public_key: Array(32).fill(6)
+  };
+  const previewQaPeer: PeerProfile = {
+    peer_id: "demo-qa",
+    display_name: "测试四号",
+    hostname: "qa-lab",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.76:24251"],
+    fingerprint: "7".repeat(64),
+    public_key: Array(32).fill(7)
+  };
+  const previewFinancePeer: PeerProfile = {
+    peer_id: "demo-finance",
+    display_name: "财务五号",
+    hostname: "finance-book",
+    avatar_hash: null,
+    status: "away",
+    endpoints: ["192.168.1.86:24251"],
+    fingerprint: "8".repeat(64),
+    public_key: Array(32).fill(8)
+  };
+  const previewHrPeer: PeerProfile = {
+    peer_id: "demo-hr",
+    display_name: "人事六号",
+    hostname: "hr-desk",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.96:24251"],
+    fingerprint: "9".repeat(64),
+    public_key: Array(32).fill(9)
+  };
+  const previewExtraPeers: PeerProfile[] = [
+    {
+      peer_id: "demo-rd",
+      display_name: "研发七号",
+      hostname: "rd-node",
+      avatar_hash: null,
+      status: "online",
+      endpoints: ["192.168.1.107:24251"],
+      fingerprint: "a".repeat(64),
+      public_key: Array(32).fill(10)
+    },
+    {
+      peer_id: "demo-support",
+      display_name: "客服八号",
+      hostname: "support-desk",
+      avatar_hash: null,
+      status: "online",
+      endpoints: ["192.168.1.118:24251"],
+      fingerprint: "b".repeat(64),
+      public_key: Array(32).fill(11)
+    },
+    {
+      peer_id: "demo-admin",
+      display_name: "行政九号",
+      hostname: "admin-room",
+      avatar_hash: null,
+      status: "away",
+      endpoints: ["192.168.1.129:24251"],
+      fingerprint: "c".repeat(64),
+      public_key: Array(32).fill(12)
+    },
+    {
+      peer_id: "demo-boss",
+      display_name: "负责人",
+      hostname: "director-laptop",
+      avatar_hash: null,
+      status: "offline",
+      endpoints: ["192.168.1.139:24251"],
+      fingerprint: "f".repeat(64),
+      public_key: Array(32).fill(15)
+    },
+    {
+      peer_id: "demo-security",
+      display_name: "安保十号",
+      hostname: "security-gate",
+      avatar_hash: null,
+      status: "online",
+      endpoints: ["192.168.1.146:24251"],
+      fingerprint: "1".repeat(64),
+      public_key: Array(32).fill(16)
+    },
+    {
+      peer_id: "demo-warehouse",
+      display_name: "仓库十一号",
+      hostname: "warehouse-pad",
+      avatar_hash: null,
+      status: "away",
+      endpoints: ["192.168.1.151:24251"],
+      fingerprint: "2".repeat(64),
+      public_key: Array(32).fill(17)
+    },
+    {
+      peer_id: "demo-market",
+      display_name: "市场十二号",
+      hostname: "marketing-pc",
+      avatar_hash: null,
+      status: "online",
+      endpoints: ["192.168.1.162:24251"],
+      fingerprint: "3".repeat(64),
+      public_key: Array(32).fill(18)
+    },
+    {
+      peer_id: "demo-legal",
+      display_name: "法务十三号",
+      hostname: "legal-desk",
+      avatar_hash: null,
+      status: "offline",
+      endpoints: ["192.168.1.173:24251"],
+      fingerprint: "4".repeat(64),
+      public_key: Array(32).fill(19)
+    },
+    {
+      peer_id: "demo-frontdesk",
+      display_name: "前台十四号",
+      hostname: "frontdesk",
+      avatar_hash: null,
+      status: "online",
+      endpoints: ["192.168.1.184:24251"],
+      fingerprint: "5".repeat(64),
+      public_key: Array(32).fill(20)
+    },
+    {
+      peer_id: "demo-lab",
+      display_name: "实验室十五号",
+      hostname: "lab-node",
+      avatar_hash: null,
+      status: "online",
+      endpoints: ["192.168.1.195:24251"],
+      fingerprint: "0".repeat(64),
+      public_key: Array(32).fill(21)
+    }
+  ];
+  const previewPeers: PeerProfile[] = [
+    previewPeer,
+    previewOpsPeer,
+    previewDesignPeer,
+    previewQaPeer,
+    previewFinancePeer,
+    previewHrPeer,
+    ...previewExtraPeers
+  ];
   const previewConversations: ConversationSummary[] = [
     {
       id: "direct:demo-peer",
       title: "产品经理",
       group_owner_peer_id: "",
       last_message_at: Date.now(),
-      last_message_preview: "欢迎使用灵犀内网通，搜索、文件和群聊入口都在这里。",
-      unread_count: 1,
+      last_message_preview: "欢迎使用 iim，搜索、文件和群聊入口都在这里。",
+      unread_count: 0,
       manual_unread: false,
       pinned: true,
       muted: false,
@@ -252,6 +416,123 @@
       muted: false,
       archived: false,
       draft_preview: ""
+    },
+    {
+      id: "direct:demo-rd",
+      title: "研发七号",
+      group_owner_peer_id: "",
+      last_message_at: Date.now() - 120000,
+      last_message_preview: "QUIC 断线重连我已经在本机压测过一轮。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "direct:demo-support",
+      title: "客服八号",
+      group_owner_peer_id: "",
+      last_message_at: Date.now() - 150000,
+      last_message_preview: "客户截图可以直接粘贴发送，文件也支持拖拽。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "group:project-alpha",
+      title: "Alpha 项目组",
+      group_owner_peer_id: "local-demo",
+      last_message_at: Date.now() - 180000,
+      last_message_preview: "研发、设计、测试请同步今天的内网验收结果。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "group:office",
+      title: "办公室通知",
+      group_owner_peer_id: "local-demo",
+      last_message_at: Date.now() - 260000,
+      last_message_preview: "下午 15:00 内网同步会，文件请直接拖到聊天框。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "group:support-shift",
+      title: "客服值班群",
+      group_owner_peer_id: "local-demo",
+      last_message_at: Date.now() - 320000,
+      last_message_preview: "晚班同事请确认文件接收目录和通知开关。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "group:ops-security",
+      title: "运维安保联动群",
+      group_owner_peer_id: "local-demo",
+      last_message_at: Date.now() - 410000,
+      last_message_preview: "门禁网段今晚升级，运维和安保同步观察广播发现。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: true,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "group:all-hands",
+      title: "全员通知群",
+      group_owner_peer_id: "local-demo",
+      last_message_at: Date.now() - 520000,
+      last_message_preview: "新版 iim 已在内网灰度，大家可以用群聊和文件传输试用。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "direct:demo-market",
+      title: "市场十二号",
+      group_owner_peer_id: "",
+      last_message_at: Date.now() - 650000,
+      last_message_preview: "宣传物料我放到共享目录，也可以直接走文件传输。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
+    },
+    {
+      id: "direct:demo-frontdesk",
+      title: "前台十四号",
+      group_owner_peer_id: "",
+      last_message_at: Date.now() - 760000,
+      last_message_preview: "访客 Wi-Fi 这边已确认，不影响办公网广播。",
+      unread_count: 0,
+      manual_unread: false,
+      pinned: false,
+      muted: false,
+      archived: false,
+      draft_preview: ""
     }
   ];
 
@@ -260,6 +541,44 @@
       x: Math.max(contextMenuInset, Math.min(event.clientX, Math.max(contextMenuInset, window.innerWidth - width))),
       y: Math.max(contextMenuInset, Math.min(event.clientY, Math.max(contextMenuInset, window.innerHeight - height)))
     };
+  }
+
+  function focusWhenMounted(node: HTMLElement) {
+    void tick().then(() => {
+      if (document.contains(node)) node.focus();
+    });
+  }
+
+  function handleModalKeydown(event: KeyboardEvent, close: () => void) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+      return;
+    }
+    if (event.key !== "Tab") return;
+
+    const dialog = event.currentTarget as HTMLElement;
+    const focusable = Array.from(
+      dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((element) => !element.hasAttribute("aria-hidden"));
+    if (focusable.length === 0) {
+      event.preventDefault();
+      dialog.focus();
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey && (active === first || !dialog.contains(active))) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && active === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   function focusContextMenuAfterRender() {
@@ -321,21 +640,16 @@
   let messages: ChatMessage[] = [];
   let hasMoreMessages = false;
   let loadingOlderMessages = false;
-  let searchResults: ChatMessage[] = [];
   let conversationSearchOpen = false;
-  let conversationSearchFocus: "query" | "date" = "query";
   let conversationSearchQuery = "";
-  let conversationSearchDate = "";
   let conversationSearchResults: ChatMessage[] = [];
   let focusedMessageId = "";
   let nudgePulseKey = 0;
   let mentionedConversationIds: string[] = [];
-  let favoriteMessages: ChatMessage[] = [];
   let pinnedMessages: ChatMessage[] = [];
   let todoMessages: ChatMessage[] = [];
   let outboxMessages: ChatMessage[] = [];
   let draft = "";
-  let query = "";
   let settings = defaultSettings;
   let dark = false;
   let sendShortcut: AppPreferences["send_shortcut"] = "enter";
@@ -352,9 +666,12 @@
   let appLocked = false;
   let profileSignature = "";
   let avatarLabel = "";
+  let avatarImage = "";
   let requireContactForMessaging = false;
   let inspectorTab: InspectorTab = "details";
   let inspectorOpen = false;
+  let inspectorPeer: PeerProfile | null = null;
+  let windowMaximized = true;
 
   const profileMenuStatusChoices: Array<{ value: PeerStatus; label: string; tone: "online" | "away" | "offline" }> = [
     { value: "online", label: "在线", tone: "online" },
@@ -368,9 +685,14 @@
   let peerTtlText = "15";
   let transportConfig: TransportConfig = defaultTransportConfig;
   let selectedPeerIds: string[] = [];
+  let createGroupDialogOpen = false;
+  let createGroupNameDraft = "";
+  let createGroupQuery = "";
+  let createGroupSubmitting = false;
   let activeGroupMemberIds: string[] = [];
   let groupNameDraft = "";
   let groupAnnouncementDraft = "";
+  let groupAnnouncementPinnedDraft = false;
   let groupMemberDraftIds: string[] = [];
   let transferTasks: TransferTask[] = [];
   let pendingFileDrafts: PendingFileDraft[] = [];
@@ -382,10 +704,12 @@
   let chatNotice = "";
   let trustStatus = "";
   let trayStatus = "窗口保持前台运行";
+  let refreshingPeers = false;
   let profileName = "";
   let profileHostname = "";
   let profileStatus: PeerStatus = "online";
   let storageOverview: StorageOverview | null = null;
+  let storageOverviewLoading = false;
   let storageMigrationProgress: StorageMigrationProgress | null = null;
   let storageMigrationActive = false;
   let trustedPeers: TrustedPeer[] = [];
@@ -404,6 +728,7 @@
   let forwardingMessage: ChatMessage | null = null;
   let forwardingMessages: ChatMessage[] = [];
   let forwardQuery = "";
+  let forwardTargetConversationId = "";
   let replyQuote: MessageQuote | null = null;
   let messageSelectionMode = false;
   let selectedMessageIds: string[] = [];
@@ -424,10 +749,10 @@
       ? directConversationPeer(activeConversationSummary, peers)
       : peers.find((peer) => activeConversation.includes(peer.peer_id)) ?? peers[0] ?? null;
   $: activeConversationTitle = activeConversation.startsWith("group:")
-    ? conversations.find((conversation) => conversation.id === activeConversation)?.title ?? "内网群聊"
+    ? conversations.find((conversation) => conversation.id === activeConversation)?.title?.trim() || "内网群聊"
     : activePeer
       ? displayPeerName(activePeer)
-      : "等待联系人";
+      : activeConversationSummary?.title?.trim() || "等待联系人";
   $: activeGroupMembers = activeConversation.startsWith("group:")
     ? [
         ...(self && activeGroupMemberIds.includes(self.peer_id) ? [self] : []),
@@ -435,6 +760,14 @@
       ]
     : [];
   $: activeGroupMemberCount = activeConversation.startsWith("group:") ? activeGroupMemberIds.length : activeGroupMembers.length;
+  $: createGroupPeers = peers.filter((peer) => selectedPeerIds.includes(peer.peer_id) && !contactMetadata[peer.peer_id]?.blocked);
+  $: eligibleGroupPeers = peers.filter((peer) => !contactMetadata[peer.peer_id]?.blocked);
+  $: filteredCreateGroupPeers = eligibleGroupPeers.filter((peer) => {
+    const query = createGroupQuery.trim().toLocaleLowerCase();
+    if (!query) return true;
+    return [displayPeerName(peer), peer.display_name, peer.hostname, peer.peer_id]
+      .some((value) => value.toLocaleLowerCase().includes(query));
+  });
   $: activeGroupOwnerPeerId = activeConversationSummary?.group_owner_peer_id?.trim() ?? "";
   $: activeGroupCanManage = !activeConversation.startsWith("group:")
     || !activeGroupOwnerPeerId
@@ -443,9 +776,6 @@
     ...(self ? { [self.peer_id]: "我" } : {}),
     ...Object.fromEntries(peers.map((peer) => [peer.peer_id, displayPeerName(peer)]))
   };
-  $: conversationTitleMap = Object.fromEntries(
-    conversations.map((conversation) => [conversation.id, conversationDisplayTitle(conversation, peers, contactMetadata)])
-  );
   $: welcomeRecentConversation =
     [...conversations].filter((conversation) => !conversation.archived).sort((left, right) => right.last_message_at - left.last_message_at)[0] ??
     conversations[0] ??
@@ -525,11 +855,11 @@
   $: pendingOutboxCount = outboxMessages.filter((message) => message.status === "queued" || message.status === "failed").length;
   $: welcomeSignalText = networkWarning || (reachablePeerCount > 0 ? "局域网直连通道可用" : "正在等待同网段设备");
   $: displaySelfName = profileName.trim() || self?.display_name || "本机用户";
-  $: railAvatarLabel = avatarLabel.trim() || Array.from(displaySelfName)[0] || "灵";
+  $: railAvatarLabel = avatarLabel.trim() || Array.from(displaySelfName)[0] || "i";
   $: profileStatusText = profileStatus === "online" ? "在线" : profileStatus === "away" ? "离开" : "隐身";
   $: loginPasswordReady = !loginEnabled || (loginPasswordDraft.length >= 4 && loginPasswordDraft === loginPasswordConfirmDraft);
   $: showMessageShell = activeSection === "messages";
-  $: showInspector = showMessageShell && Boolean(activeConversation) && (inspectorOpen || activeConversation.startsWith("group:"));
+  $: showInspector = showMessageShell && Boolean(activeConversation) && inspectorOpen;
   $: networkInputValidation = validateNetworkInputs(seedText, rangeText);
   $: networkTimingValidation = validateNetworkTiming(
     discoveryIntervalText,
@@ -541,6 +871,9 @@
 
   onMount(() => {
     void bootstrap();
+    if (hasTauriRuntime()) {
+      void getCurrentWindow().isMaximized().then((value) => (windowMaximized = value));
+    }
     const handleDocumentContextMenu = (event: MouseEvent) => {
       const editable = editableTextElementFromTarget(event.target);
       const target = event.target instanceof Element ? event.target : null;
@@ -605,7 +938,7 @@
         textEditMenu = null;
         if (activeConversation) {
           conversationSearchOpen = true;
-          conversationSearchFocus = "query";
+          inspectorOpen = false;
         }
       }
     };
@@ -649,6 +982,7 @@
       login_password_hash: preferences.login_password_hash ?? "",
       profile_signature: preferences.profile_signature ?? "",
       avatar_label: preferences.avatar_label ?? "",
+      avatar_image: preferences.avatar_image ?? "",
       require_contact_for_messaging: Boolean(preferences.require_contact_for_messaging)
     };
   }
@@ -665,6 +999,7 @@
       login_password_hash: loginPasswordHash,
       profile_signature: profileSignature,
       avatar_label: avatarLabel,
+      avatar_image: avatarImage,
       require_contact_for_messaging: requireContactForMessaging,
       ...patch
     });
@@ -710,7 +1045,6 @@
           messages = messages.map((message) => (message.id === event.payload.id ? event.payload : message));
         }
         conversations = updateConversationStatusPreview(conversations, event.payload, messagePreview(event.payload));
-        favoriteMessages = syncFavoriteMessageList(favoriteMessages, event.payload);
         pinnedMessages = syncPinnedMessageList(
           pinnedMessages,
           event.payload,
@@ -722,7 +1056,6 @@
           todoMessages.some((message) => message.id === event.payload.id)
         );
         outboxMessages = syncOutboxMessageList(outboxMessages, event.payload);
-        searchResults = replaceMessageInList(searchResults, event.payload);
       }),
       listen<Record<string, string | number>>("transfer:progress", (event) => {
         const transferId = String(event.payload.transfer_id ?? `transfer-${Date.now()}`);
@@ -824,11 +1157,7 @@
         savedSettings,
         savedTransportConfig,
         savedPreferences,
-        savedTransfers,
-        savedStorage,
-        savedTrustedPeers,
-        savedTodoMessages,
-        savedOutboxMessages
+        savedTransfers
       ] = await Promise.all([
         getSelfProfile(),
         listPeers(),
@@ -837,17 +1166,13 @@
         getNetworkSettings(),
         getTransportConfig(),
         getAppPreferences(),
-        listTransfers(),
-        getStorageOverview(),
-        listTrustedPeers(),
-        listTodoMessages(),
-        listOutboxMessages()
+        listTransfers()
       ]);
       bootProgress = 58;
       bootLabel = "正在整理会话和联系人";
       const shouldSeedPreview = peerList.length === 0 && conversationList.length === 0;
-      const effectivePeers = shouldSeedPreview ? [previewPeer, previewOpsPeer] : peerList;
-      const effectiveConversations = shouldSeedPreview ? previewConversations : conversationList;
+      const effectivePeers = peerList.length === 0 ? previewPeers : peerList;
+      const effectiveConversations = peerList.length === 0 ? mergePreviewConversations(conversationList) : conversationList;
       self = profile;
       profileName = profile.display_name;
       profileHostname = profile.hostname;
@@ -869,7 +1194,9 @@
       loginPasswordHash = preferences.login_password_hash;
       profileSignature = preferences.profile_signature;
       avatarLabel = preferences.avatar_label;
+      avatarImage = preferences.avatar_image;
       requireContactForMessaging = preferences.require_contact_for_messaging;
+      transferTasks = savedTransfers;
       appLocked = preferences.login_enabled;
       loginUnlockDraft = "";
       loginUnlockError = "";
@@ -877,17 +1204,13 @@
       rangeText = savedSettings.scan_ranges.join(" ");
       discoveryIntervalText = String(savedSettings.discovery_interval_secs);
       peerTtlText = String(savedSettings.peer_ttl_secs);
-      transferTasks = savedTransfers;
-      storageOverview = savedStorage;
-      trustedPeers = savedTrustedPeers;
-      todoMessages = savedTodoMessages ?? [];
-      outboxMessages = savedOutboxMessages ?? [];
-      activeConversation = initialConversationId(effectiveConversations);
+      activeConversation = shouldSeedPreview ? "" : initialConversationId(effectiveConversations);
       bootProgress = 86;
-      bootLabel = activeConversation ? "正在打开最近会话" : "正在准备消息工作台";
+      bootLabel = activeConversation ? "正在打开最近会话" : "正在准备会话";
       await loadConversation(activeConversation);
       bootProgress = 100;
       bootLabel = "启动完成";
+      void loadDeferredStartupData();
     } catch (error) {
       statusText = `启动失败：${error instanceof Error ? error.message : String(error)}`;
     } finally {
@@ -895,13 +1218,155 @@
     }
   }
 
-  function initialConversationId(_conversationList: ConversationSummary[]) {
-    return "";
+  function initialConversationId(conversationList: ConversationSummary[]) {
+    return [...conversationList]
+      .filter((conversation) => !conversation.archived)
+      .sort((left, right) => {
+        if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
+        return right.last_message_at - left.last_message_at;
+      })[0]?.id ?? conversationList[0]?.id ?? "";
   }
 
   async function refreshPeers() {
-    peers = await listPeers();
-    statusText = `已刷新联系人：${peers.length} 个设备`;
+    if (refreshingPeers) return true;
+    refreshingPeers = true;
+    statusText = "正在刷新联系人...";
+    try {
+      const [nextPeers] = await Promise.all([
+        listPeers(),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 650))
+      ]);
+      peers = nextPeers.length === 0 ? previewPeers : nextPeers;
+      conversations = nextPeers.length === 0 ? mergePreviewConversations(conversations) : conversations;
+      statusText = `已刷新联系人：${peers.length} 个设备`;
+      return true;
+    } catch (error) {
+      statusText = `刷新联系人失败：${errorMessage(error)}`;
+      chatNotice = statusText;
+      return false;
+    } finally {
+      refreshingPeers = false;
+    }
+  }
+
+  async function loadDeferredStartupData() {
+    await tick();
+    const [savedTrustedPeers, savedTodoMessages, savedOutboxMessages] = await Promise.allSettled([
+      listTrustedPeers(),
+      listTodoMessages(),
+      listOutboxMessages()
+    ]);
+    if (savedTrustedPeers.status === "fulfilled") {
+      trustedPeers = savedTrustedPeers.value;
+    }
+    if (savedTodoMessages.status === "fulfilled") {
+      todoMessages = mergeStartupMessages(savedTodoMessages.value, todoMessages);
+    }
+    if (savedOutboxMessages.status === "fulfilled") {
+      outboxMessages = mergeStartupMessages(savedOutboxMessages.value, outboxMessages);
+    }
+  }
+
+  function mergeStartupMessages(saved: ChatMessage[], current: ChatMessage[]) {
+    const currentIds = new Set(current.map((message) => message.id));
+    return [...current, ...saved.filter((message) => !currentIds.has(message.id))];
+  }
+
+  function mergePreviewConversations(conversationList: ConversationSummary[]) {
+    const existingIds = new Set(conversationList.map((conversation) => conversation.id));
+    return sortConversationSummaries([
+      ...conversationList,
+      ...previewConversations.filter((conversation) => !existingIds.has(conversation.id))
+    ]);
+  }
+
+  function previewMessage(
+    conversationId: string,
+    senderId: string,
+    body: string,
+    offsetMs: number,
+    status: ChatMessage["status"] = senderId === (self?.peer_id ?? "local-demo") ? "read" : "received"
+  ): ChatMessage {
+    return {
+      id: `preview-${conversationId}-${senderId}-${offsetMs}`,
+      conversation_id: conversationId,
+      sender_id: senderId,
+      body,
+      attachments: [],
+      created_at: Date.now() - offsetMs,
+      status,
+      recalled: false,
+      quote: null,
+      favorited: false,
+      reactions: []
+    };
+  }
+
+  function previewMessagesForConversation(conversationId: string) {
+    const localId = self?.peer_id ?? "local-demo";
+    switch (conversationId) {
+      case "direct:demo-peer":
+        return [
+          previewMessage(conversationId, "demo-peer", "我把今天要验收的功能列好了：搜索、文件传输、截图粘贴、群聊和设置。", 240000),
+          previewMessage(conversationId, localId, "收到，我先看聊天体验，右键菜单和消息气泡都继续收一收。", 170000),
+          previewMessage(conversationId, "demo-peer", "可以，主界面要像日常聊天工具，不要像后台工作台。", 90000)
+        ];
+      case "direct:demo-ops":
+        return [
+          previewMessage(conversationId, "demo-ops", "跨网段种子节点稍后再测，同网段广播已经能发现。", 210000),
+          previewMessage(conversationId, localId, "先保持默认自动发现，高级网络设置收进设置页里。", 130000)
+        ];
+      case "direct:demo-rd":
+        return [
+          previewMessage(conversationId, "demo-rd", "QUIC 断线重连我已经在本机压测过一轮。", 190000),
+          previewMessage(conversationId, localId, "好，失败重试最多 3 次，之后只显示失败。", 110000)
+        ];
+      case "direct:demo-support":
+        return [
+          previewMessage(conversationId, "demo-support", "客户截图可以直接粘贴发送，文件也支持拖拽。", 180000),
+          previewMessage(conversationId, localId, "聊天框工具栏就保留常用入口，其他收进更多菜单。", 100000)
+        ];
+      case "group:project-alpha":
+        return [
+          previewMessage(conversationId, "demo-peer", "研发、设计、测试请同步今天的内网验收结果。", 260000),
+          previewMessage(conversationId, "demo-design", "我这边重点看消息气泡、引用和菜单细节。", 180000),
+          previewMessage(conversationId, "demo-qa", "会补 1366 和 1920 两个窗口尺寸截图。", 90000)
+        ];
+      case "group:office":
+        return [
+          previewMessage(conversationId, "demo-hr", "下午 15:00 内网同步会，文件请直接拖到聊天框。", 220000),
+          previewMessage(conversationId, "demo-finance", "收到，会议资料我放到文件传输里。", 130000)
+        ];
+      case "group:support-shift":
+        return [
+          previewMessage(conversationId, "demo-support", "晚班同事请确认文件接收目录和通知开关。", 230000),
+          previewMessage(conversationId, "demo-admin", "通知点击回到会话这个流程也要验收。", 120000)
+        ];
+      case "group:ops-security":
+        return [
+          previewMessage(conversationId, "demo-ops", "门禁网段今晚升级，运维和安保同步观察广播发现。", 260000),
+          previewMessage(conversationId, "demo-security", "安保室这边能看到前台和仓库设备。", 170000),
+          previewMessage(conversationId, localId, "如果自动发现不稳，先在高级网络里补种子节点。", 80000)
+        ];
+      case "group:all-hands":
+        return [
+          previewMessage(conversationId, "demo-hr", "新版 iim 已在内网灰度，大家可以用群聊和文件传输试用。", 280000),
+          previewMessage(conversationId, "demo-market", "我这边重点试图片粘贴和转发。", 190000),
+          previewMessage(conversationId, "demo-frontdesk", "前台设备在线，访客网不影响办公网广播。", 90000)
+        ];
+      case "direct:demo-market":
+        return [
+          previewMessage(conversationId, "demo-market", "宣传物料我放到共享目录，也可以直接走文件传输。", 230000),
+          previewMessage(conversationId, localId, "直接拖进聊天框发我一份就行。", 140000)
+        ];
+      case "direct:demo-frontdesk":
+        return [
+          previewMessage(conversationId, "demo-frontdesk", "访客 Wi-Fi 这边已确认，不影响办公网广播。", 210000),
+          previewMessage(conversationId, localId, "收到，后面把前台设备也加进全员通知群。", 100000)
+        ];
+      default:
+        return [];
+    }
   }
 
   async function loadConversation(conversationId: string) {
@@ -912,6 +1377,8 @@
       }
     }
     activeConversation = conversationId;
+    inspectorOpen = false;
+    inspectorPeer = null;
     replyQuote = null;
     cancelMessageSelection();
     clearMentionedConversation(conversationId);
@@ -924,13 +1391,13 @@
       inspectorOpen = false;
       conversationSearchOpen = false;
       conversationSearchQuery = "";
-      conversationSearchDate = "";
       conversationSearchResults = [];
       focusedMessageId = "";
       pinnedMessages = [];
       activeGroupMemberIds = [];
       groupNameDraft = "";
       groupAnnouncementDraft = "";
+      groupAnnouncementPinnedDraft = false;
       groupMemberDraftIds = [];
       draft = "";
       return;
@@ -941,25 +1408,47 @@
       conversationId.startsWith("group:") ? listGroupMembers(conversationId) : Promise.resolve([]),
       getConversationDraft(conversationId)
     ]);
-    messages = loadedMessages ?? [];
+    const effectiveMemberIds =
+      conversationId === "group:project-alpha"
+        ? Array.from(new Set([...(memberIds ?? []), self?.peer_id ?? "local-demo", "demo-peer", "demo-rd", "demo-design", "demo-qa"]))
+        : conversationId === "group:office"
+          ? Array.from(new Set([...(memberIds ?? []), self?.peer_id ?? "local-demo", "demo-peer", "demo-ops", "demo-finance", "demo-hr"]))
+          : conversationId === "group:support-shift"
+            ? Array.from(new Set([...(memberIds ?? []), self?.peer_id ?? "local-demo", "demo-support", "demo-ops", "demo-admin", "demo-hr"]))
+            : conversationId === "group:ops-security"
+              ? Array.from(new Set([...(memberIds ?? []), self?.peer_id ?? "local-demo", "demo-ops", "demo-security", "demo-frontdesk", "demo-warehouse"]))
+              : conversationId === "group:all-hands"
+                ? Array.from(new Set([...(memberIds ?? []), self?.peer_id ?? "local-demo", ...previewPeers.map((peer) => peer.peer_id)]))
+                : memberIds ?? [];
+    messages = loadedMessages && loadedMessages.length > 0
+      ? loadedMessages
+      : previewMessagesForConversation(conversationId);
     pinnedMessages = pinned ?? [];
     hasMoreMessages = messages.length >= messagePageSize;
-    inspectorTab = conversationId.startsWith("group:") ? "members" : "details";
-    inspectorOpen = conversationId.startsWith("group:");
+    inspectorTab = "details";
     conversationSearchOpen = false;
     conversationSearchQuery = "";
-    conversationSearchDate = "";
     conversationSearchResults = [];
     focusedMessageId = "";
-    activeGroupMemberIds = memberIds ?? [];
+    activeGroupMemberIds = effectiveMemberIds;
     groupNameDraft = conversationId.startsWith("group:")
       ? conversations.find((conversation) => conversation.id === conversationId)?.title ?? "内网群聊"
       : "";
     groupAnnouncementDraft = conversationId.startsWith("group:")
       ? conversations.find((conversation) => conversation.id === conversationId)?.group_announcement ?? ""
       : "";
-    groupMemberDraftIds = memberIds.filter((peerId) => peerId !== self?.peer_id);
+    groupAnnouncementPinnedDraft = conversationId.startsWith("group:")
+      ? conversations.find((conversation) => conversation.id === conversationId)?.group_announcement_pinned ?? false
+      : false;
+    groupMemberDraftIds = effectiveMemberIds.filter((peerId) => peerId !== self?.peer_id);
     applyDraft(savedDraft);
+    const conversation = conversations.find((item) => item.id === conversationId);
+    const shouldMarkRead = Boolean(
+      conversation?.manual_unread ||
+      (conversation?.unread_count ?? 0) > 0 ||
+      messages.some((message) => message.status === "received")
+    );
+    if (!shouldMarkRead) return;
     try {
       await markConversationRead(conversationId);
       messages = messages.map((message) => (message.status === "received" ? { ...message, status: "read" } : message));
@@ -971,10 +1460,35 @@
 
   async function handleSend(text = draft) {
     const body = text.trim();
-    if (!body) return;
+    const hasPendingFiles = pendingFileDrafts.length > 0;
+    if (!body && !hasPendingFiles) return;
     if (outgoingBlockReason) {
       statusText = outgoingBlockReason;
       chatNotice = outgoingBlockReason;
+      return;
+    }
+
+    if (hasPendingFiles) {
+      if (fileTransferBlockReason) {
+        statusText = fileTransferBlockReason;
+        chatNotice = fileTransferBlockReason;
+        return;
+      }
+      const drafts = [...pendingFileDrafts];
+      const sent = await sendSelectedPaths(
+        drafts.map((item) => item.path),
+        "消息附件",
+        body,
+        replyQuote,
+      );
+      if (!sent) return;
+      pendingFileDrafts = [];
+      draft = "";
+      replyQuote = null;
+      const draftError = await persistDraft(activeConversation);
+      if (draftError) statusText = `消息已发送，草稿清理失败：${draftError}`;
+      scheduleDemoAutoReply(activeConversation, body || "文件");
+      void publishTyping(false);
       return;
     }
 
@@ -1192,33 +1706,6 @@
     typingIndicators = removeTypingIndicatorsForPeer(typingIndicators, peerId);
   }
 
-  async function refreshMessageCollections() {
-    const [favorites = [], todos = [], outbox = []] = await Promise.all([listFavoriteMessages(), listTodoMessages(), listOutboxMessages()]);
-    favoriteMessages = favorites;
-    todoMessages = todos;
-    outboxMessages = outbox;
-    return { favorites, todos, outbox };
-  }
-
-  async function handleSearch() {
-    const needle = query.trim();
-    if (!needle) {
-      searchResults = [];
-      activeSection = "messages";
-      return;
-    }
-    try {
-      searchResults = await searchMessages(needle);
-      await refreshMessageCollections();
-      activeSection = "search";
-      statusText = `搜索到 ${searchResults.length} 条记录`;
-    } catch (error) {
-      searchResults = [];
-      activeSection = "search";
-      statusText = `搜索失败：${errorMessage(error)}`;
-    }
-  }
-
   async function runConversationSearch() {
     const needle = conversationSearchQuery.trim();
     if (!needle) {
@@ -1228,7 +1715,12 @@
     }
     try {
       conversationSearchResults = await searchConversationMessages(activeConversation, needle);
-      focusedMessageId = conversationSearchResults[0]?.id ?? "";
+      const firstResult = conversationSearchResults[0] ?? null;
+      if (firstResult) {
+        focusConversationSearchResult(firstResult);
+      } else {
+        focusedMessageId = "";
+      }
       statusText = `当前会话搜索到 ${conversationSearchResults.length} 条记录`;
     } catch (error) {
       conversationSearchResults = [];
@@ -1237,63 +1729,16 @@
     }
   }
 
-  function conversationDateRange(value: string) {
-    const start = new Date(`${value}T00:00:00`);
-    if (Number.isNaN(start.getTime())) return null;
-    const end = new Date(start);
-    end.setDate(start.getDate() + 1);
-    return { startAt: start.getTime(), endAt: end.getTime() };
-  }
-
-  async function jumpConversationDate() {
-    const range = conversationDateRange(conversationSearchDate);
-    if (!range) {
-      conversationSearchResults = [];
-      focusedMessageId = "";
-      statusText = "请选择要跳转的聊天日期";
-      return;
-    }
-    conversationSearchOpen = true;
-    conversationSearchFocus = "date";
-    try {
-      conversationSearchResults = await listConversationMessagesBetween(activeConversation, range.startAt, range.endAt);
-      focusedMessageId = conversationSearchResults[0]?.id ?? "";
-      statusText =
-        conversationSearchResults.length > 0
-          ? `已定位 ${conversationSearchDate} 的 ${conversationSearchResults.length} 条消息`
-          : `${conversationSearchDate} 没有聊天记录`;
-    } catch (error) {
-      conversationSearchResults = [];
-      focusedMessageId = "";
-      statusText = `日期跳转失败：${errorMessage(error)}`;
-    }
-  }
-
   function toggleConversationSearch() {
-    conversationSearchFocus = "query";
     conversationSearchOpen = !conversationSearchOpen;
+    if (conversationSearchOpen) inspectorOpen = false;
     if (!conversationSearchOpen) {
       clearConversationSearchState();
     }
   }
 
-  function openConversationDateJump() {
-    conversationSearchFocus = "date";
-    conversationSearchOpen = true;
-  }
-
-  async function openSidebarConversationSearch() {
-    const targetConversationId = activeConversation || welcomeRecentConversation?.id || conversations.find((conversation) => !conversation.archived)?.id || conversations[0]?.id || "";
-    if (targetConversationId && targetConversationId !== activeConversation) {
-      await loadConversation(targetConversationId);
-    }
-    conversationSearchFocus = "query";
-    conversationSearchOpen = Boolean(targetConversationId);
-  }
-
   function clearConversationSearchState() {
     conversationSearchQuery = "";
-    conversationSearchDate = "";
     conversationSearchResults = [];
     focusedMessageId = "";
   }
@@ -1319,8 +1764,6 @@
   function clearLocalConversationState(conversationId: string) {
     clearTypingIndicatorsForConversation(conversationId);
     clearMentionedConversation(conversationId);
-    searchResults = searchResults.filter((message) => message.conversation_id !== conversationId);
-    favoriteMessages = favoriteMessages.filter((message) => message.conversation_id !== conversationId);
     pinnedMessages = pinnedMessages.filter((message) => message.conversation_id !== conversationId);
     todoMessages = todoMessages.filter((message) => message.conversation_id !== conversationId);
     outboxMessages = outboxMessages.filter((message) => message.conversation_id !== conversationId);
@@ -1334,13 +1777,12 @@
       groupMemberDraftIds = [];
       groupNameDraft = "";
       groupAnnouncementDraft = "";
+      groupAnnouncementPinnedDraft = false;
     }
   }
 
   function clearLocalMessageReferences(messageId: string) {
     messages = messages.filter((message) => message.id !== messageId);
-    searchResults = searchResults.filter((message) => message.id !== messageId);
-    favoriteMessages = favoriteMessages.filter((message) => message.id !== messageId);
     pinnedMessages = pinnedMessages.filter((message) => message.id !== messageId);
     todoMessages = todoMessages.filter((message) => message.id !== messageId);
     outboxMessages = outboxMessages.filter((message) => message.id !== messageId);
@@ -1382,21 +1824,10 @@
   }
 
   function focusConversationSearchResult(message: ChatMessage) {
-    focusedMessageId = message.id;
-  }
-
-  async function openMessageResult(message: ChatMessage) {
-    try {
-      await loadConversation(message.conversation_id);
-      messages = messages.some((item) => item.id === message.id)
-        ? messages.map((item) => (item.id === message.id ? message : item))
-        : [...messages, message].sort((a, b) => a.created_at - b.created_at);
-      focusedMessageId = message.id;
-      activeSection = "messages";
-      statusText = `已定位消息：${conversationTitleFor(message.conversation_id)}`;
-    } catch (error) {
-      statusText = `定位消息失败：${errorMessage(error)}`;
+    if (!messages.some((item) => item.id === message.id)) {
+      messages = [...messages, message].sort((left, right) => left.created_at - right.created_at);
     }
+    focusedMessageId = message.id;
   }
 
   async function selectSection(section: Section) {
@@ -1406,22 +1837,27 @@
     }
     inspectorOpen = false;
     activeSection = section;
-    if (section === "search") {
-      try {
-        await refreshMessageCollections();
-      } catch (error) {
-        favoriteMessages = [];
-        todoMessages = [];
-        outboxMessages = [];
-        statusText = `消息资料刷新失败：${errorMessage(error)}`;
-      }
-    }
   }
 
   function openSettings(tab: SettingsTab) {
     settingsTab = tab;
     inspectorOpen = false;
     activeSection = "settings";
+    if (tab === "storage") {
+      void ensureStorageOverviewLoaded();
+    }
+  }
+
+  async function ensureStorageOverviewLoaded() {
+    if (storageOverview || storageOverviewLoading) return;
+    storageOverviewLoading = true;
+    try {
+      storageOverview = await getStorageOverview();
+    } catch (error) {
+      statusText = `存储信息加载失败：${errorMessage(error)}`;
+    } finally {
+      storageOverviewLoading = false;
+    }
   }
 
   function settingsTabFromEvent(value: string): SettingsTab {
@@ -1441,34 +1877,64 @@
     return "network";
   }
 
-  async function handleCreateGroup() {
-    const members = filterUnblockedPeerIds(selectedPeerIds.length > 0 ? selectedPeerIds : peers.map((peer) => peer.peer_id));
-    if (members.length === 0) {
-      statusText = "请先选择群聊成员";
+  function openCreateGroupDialog() {
+    if (eligibleGroupPeers.length === 0) {
+      statusText = "没有可加入群聊的联系人";
       return;
     }
-    const id = await createGroup("内网群聊", members);
-    const group: ConversationSummary = {
-      id,
-      title: `内网群聊 (${members.length})`,
-      group_announcement: "",
-      group_owner_peer_id: self?.peer_id ?? "",
-      last_message_at: Date.now(),
-      last_message_preview: "",
-      unread_count: 0,
-      manual_unread: false,
-      pinned: false,
-      muted: false,
-      archived: false,
-      draft_preview: ""
-    };
-    conversations = [group, ...conversations.filter((conversation) => conversation.id !== id)];
     selectedPeerIds = [];
-    activeGroupMemberIds = self ? [...members, self.peer_id] : members;
-    groupNameDraft = group.title;
-    groupAnnouncementDraft = group.group_announcement ?? "";
-    groupMemberDraftIds = members;
-    await loadConversation(id);
+    createGroupNameDraft = "群聊";
+    createGroupQuery = "";
+    createGroupDialogOpen = true;
+  }
+
+  function closeCreateGroupDialog() {
+    if (createGroupSubmitting) return;
+    createGroupDialogOpen = false;
+    createGroupNameDraft = "";
+    createGroupQuery = "";
+    selectedPeerIds = [];
+  }
+
+  async function handleCreateGroup() {
+    const members = filterUnblockedPeerIds(selectedPeerIds);
+    const title = createGroupNameDraft.trim();
+    if (members.length === 0 || !title || createGroupSubmitting) return;
+    createGroupSubmitting = true;
+
+    try {
+      const id = await createGroup(title, members);
+      const group: ConversationSummary = {
+        id,
+        title,
+        group_announcement: "",
+        group_announcement_pinned: false,
+        group_owner_peer_id: self?.peer_id ?? "",
+        last_message_at: Date.now(),
+        last_message_preview: "",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: ""
+      };
+      conversations = [group, ...conversations.filter((conversation) => conversation.id !== id)];
+      selectedPeerIds = [];
+      activeGroupMemberIds = self ? [...members, self.peer_id] : members;
+      groupNameDraft = group.title;
+      groupAnnouncementDraft = group.group_announcement ?? "";
+      groupAnnouncementPinnedDraft = group.group_announcement_pinned ?? false;
+      groupMemberDraftIds = members;
+      createGroupDialogOpen = false;
+      createGroupNameDraft = "";
+      createGroupQuery = "";
+      await loadConversation(id);
+    } catch (error) {
+      statusText = `创建群聊失败：${errorMessage(error)}`;
+    } finally {
+      createGroupSubmitting = false;
+    }
   }
 
   function togglePeer(peerId: string) {
@@ -1491,15 +1957,47 @@
     }
     try {
       groupMemberDraftIds = filterUnblockedPeerIds(groupMemberDraftIds);
-      const summary = await updateGroup(activeConversation, groupNameDraft, groupAnnouncementDraft, groupMemberDraftIds);
+      const summary = await updateGroup(
+        activeConversation,
+        groupNameDraft,
+        groupAnnouncementDraft,
+        groupAnnouncementPinnedDraft,
+        groupMemberDraftIds
+      );
       conversations = upsertConversationSummary(summary);
       activeGroupMemberIds = await listGroupMembers(activeConversation);
       groupMemberDraftIds = filterUnblockedPeerIds(activeGroupMemberIds.filter((peerId) => peerId !== self?.peer_id));
       groupNameDraft = summary.title;
       groupAnnouncementDraft = summary.group_announcement ?? "";
+      groupAnnouncementPinnedDraft = summary.group_announcement_pinned ?? false;
       statusText = `已更新群聊：${summary.title}`;
     } catch (error) {
       statusText = `群资料保存失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  async function saveGroupAnnouncement(announcement: string, pinned: boolean) {
+    if (!activeConversation.startsWith("group:")) return;
+    if (!activeGroupCanManage) {
+      statusText = "只有群创建者可以发布群公告";
+      return;
+    }
+    try {
+      const normalizedAnnouncement = announcement.trim();
+      const summary = await updateGroup(
+        activeConversation,
+        groupNameDraft,
+        normalizedAnnouncement,
+        normalizedAnnouncement ? pinned : false,
+        filterUnblockedPeerIds(groupMemberDraftIds)
+      );
+      conversations = upsertConversationSummary(summary);
+      groupAnnouncementDraft = summary.group_announcement ?? "";
+      groupAnnouncementPinnedDraft = summary.group_announcement_pinned ?? false;
+      statusText = normalizedAnnouncement ? "群公告已发布" : "群公告已清空";
+    } catch (error) {
+      statusText = `群公告保存失败：${error instanceof Error ? error.message : String(error)}`;
+      throw error;
     }
   }
 
@@ -1508,10 +2006,10 @@
       statusText = "桌面版支持导出聊天记录";
       return;
     }
-    const path = await save({
+    const path = await saveDialog({
       title: "导出聊天记录",
-      defaultPath: `${safeFileStem(title || conversationId)}-${new Date().toISOString().slice(0, 10)}.md`,
-      filters: [{ name: "Markdown", extensions: ["md"] }]
+      defaultPath: `${safeFileStem(title || conversationId)}-${new Date().toISOString().slice(0, 10)}.txt`,
+      filters: [{ name: "文本文件", extensions: ["txt"] }]
     });
     if (!path) return;
     try {
@@ -1688,6 +2186,7 @@
     loginPasswordHash = saved.login_password_hash;
     profileSignature = saved.profile_signature;
     avatarLabel = saved.avatar_label;
+    avatarImage = saved.avatar_image;
     requireContactForMessaging = saved.require_contact_for_messaging;
     return saved;
   }
@@ -1850,7 +2349,7 @@
   }
 
   async function saveProfile() {
-    if (!self) return;
+    if (!self) return false;
     try {
       const updated = await updateSelfProfile({
         ...self,
@@ -1861,8 +2360,10 @@
       self = updated;
       peers = upsertPeer(peers, updated);
       statusText = "本机资料已更新，会随下一次发现广播生效";
+      return true;
     } catch (error) {
       statusText = `本机资料保存失败：${errorMessage(error)}`;
+      return false;
     }
   }
 
@@ -1973,7 +2474,7 @@
     textEditMenu = null;
     appMenu = null;
     conversationMenu = {
-      ...clampContextMenuPosition(event, 190, 290),
+      ...clampContextMenuPosition(event, 190, 210),
       conversation
     };
     focusContextMenuAfterRender();
@@ -2024,10 +2525,15 @@
     await loadConversation(`direct:${peerId}`);
   }
 
-  function openPeerDetails(peer: PeerProfile) {
-    focusedContactPeerId = peer.peer_id;
-    activeSection = "contacts";
-    statusText = `已打开联系人详情：${displayPeerName(peer)}`;
+  async function openPeerDetails(peer: PeerProfile) {
+    if (!activeConversation) {
+      await loadConversation(`direct:${peer.peer_id}`);
+    }
+    inspectorPeer = peer;
+    inspectorTab = "details";
+    inspectorOpen = true;
+    conversationSearchOpen = false;
+    activeSection = "messages";
   }
 
   function openContactDetailsFromMenu() {
@@ -2072,17 +2578,17 @@
   async function copyContactEndpointFromMenu() {
     if (!contactMenu) return;
     const peer = contactMenu.peer;
-    const endpoints = peer.endpoints.join(" ");
+    const endpoints = peer.endpoints.map((endpoint) => endpoint.replace(/:\d+$/, "")).join(" ");
     contactMenu = null;
     if (!endpoints) {
-      statusText = `${displayPeerName(peer)} 暂无可复制端点`;
+      statusText = `${displayPeerName(peer)} 暂无可复制 IP`;
       return;
     }
     try {
       await navigator.clipboard.writeText(endpoints);
-      statusText = `${displayPeerName(peer)} 端点已复制，可用于网络排障`;
+      statusText = `${displayPeerName(peer)} IP 地址已复制`;
     } catch (error) {
-      statusText = `${displayPeerName(peer)} 端点复制失败：${error instanceof Error ? error.message : String(error)}`;
+      statusText = `${displayPeerName(peer)} IP 地址复制失败：${error instanceof Error ? error.message : String(error)}`;
     }
   }
 
@@ -2105,7 +2611,7 @@
       : "未建立信任记录";
 
     return [
-      "灵犀内网通联系人诊断",
+      "iim 联系人诊断",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `联系人：${displayPeerName(peer)}`,
       `设备 ID：${peer.peer_id}`,
@@ -2115,7 +2621,7 @@
       `分组：${metadata.group_name || "默认"}`,
       `星标：${metadata.favorite ? "是" : "否"}`,
       `阻止：${metadata.blocked ? "是" : "否"}`,
-      `端点：${peer.endpoints.join(", ") || "等待发现"}`,
+      `IP 地址：${peer.endpoints.map((endpoint) => endpoint.replace(/:\d+$/, "")).join(", ") || "等待发现"}`,
       `指纹：${peer.fingerprint || "未知"}`,
       `信任状态：${trustSummary}`,
       `会话 ID：${conversationId}`,
@@ -2142,92 +2648,6 @@
     }
   }
 
-  async function openConversationFromMenu() {
-    if (!conversationMenu) return;
-    const conversationId = conversationMenu.conversation.id;
-    conversationMenu = null;
-    await loadConversation(conversationId);
-  }
-
-  async function copyConversationIdFromMenu() {
-    if (!conversationMenu) return;
-    const conversationId = conversationMenu.conversation.id;
-    conversationMenu = null;
-    try {
-      await navigator.clipboard?.writeText(conversationId);
-      statusText = "会话 ID 已复制";
-    } catch (error) {
-      statusText = `会话 ID 复制失败：${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
-  function conversationDiagnosticReportFromSummary(conversation: ConversationSummary) {
-    const title = conversationDisplayTitle(conversation, peers, contactMetadata);
-    const isTargetActive = conversation.id === activeConversation;
-    const loadedMessages = isTargetActive ? messages : [];
-    const relatedTransfers = transferTasks.filter((task) => task.conversationId === conversation.id);
-    const directPeer = directConversationPeer(conversation, peers);
-    const type = conversation.id.startsWith("group:") ? "群聊" : "直连";
-    const failedTransfers = relatedTransfers.filter((task) => {
-      const normalized = task.status.toLowerCase();
-      return normalized === "failed" || task.status === "失败";
-    });
-    const activeTransfers = relatedTransfers.filter(isActiveTransferTask);
-    const failedMessages = loadedMessages.filter((message) => message.status === "failed").length;
-    const retryingMessages = loadedMessages.filter((message) => ["queued", "sending"].includes(message.status)).length;
-    const attachmentCount = loadedMessages.reduce((sum, message) => sum + message.attachments.length, 0);
-    const attachmentFileCount = loadedMessages.reduce(
-      (sum, message) =>
-        sum + message.attachments.reduce((attachmentSum, attachment) => attachmentSum + attachment.manifest.files.length, 0),
-      0
-    );
-    const memberOrPeer = directPeer
-      ? `${displayPeerName(directPeer)} ${directPeer.status === "online" ? "可联系" : "暂不可达"}，主机 ${directPeer.hostname || "未知"}，端点 ${
-          directPeer.endpoints.join(", ") || "等待发现"
-        }`
-      : conversation.id.startsWith("group:")
-        ? isTargetActive
-          ? `成员 ${activeGroupMemberCount}，可联系 ${activeGroupMembers.filter((peer) => peer.status === "online").length}`
-          : "群成员需打开会话详情后查看"
-        : "未发现直连联系人";
-
-    return [
-      "灵犀内网通会话诊断",
-      `生成时间：${new Date().toLocaleString("zh-CN")}`,
-      `会话：${title}`,
-      `会话 ID：${conversation.id}`,
-      `类型：${type}`,
-      `成员/联系人：${memberOrPeer}`,
-      `置顶：${conversation.pinned ? "是" : "否"}`,
-      `免打扰：${conversation.muted ? "是" : "否"}`,
-      `归档：${conversation.archived ? "是" : "否"}`,
-      `未读：${conversation.unread_count}`,
-      `草稿：${conversation.draft_preview || "无"}`,
-      `最近消息：${conversation.last_message_preview || "无"}`,
-      `已加载消息：${isTargetActive ? String(loadedMessages.length) : "未加载"}`,
-      `待发送/发送中消息：${retryingMessages}`,
-      `失败消息：${failedMessages}`,
-      `附件消息：${attachmentCount}`,
-      `附件文件：${attachmentFileCount}`,
-      `传输任务：${relatedTransfers.length}`,
-      `活跃传输：${activeTransfers.length}`,
-      `失败传输：${failedTransfers.length}`,
-      `最近网络警告：${networkWarnings.join(" | ") || networkWarning || "无"}`
-    ].join("\n");
-  }
-
-  async function copyConversationDiagnosticFromMenu() {
-    if (!conversationMenu) return;
-    const report = conversationDiagnosticReportFromSummary(conversationMenu.conversation);
-    conversationMenu = null;
-    try {
-      await navigator.clipboard?.writeText(report);
-      statusText = "会话诊断报告已复制";
-    } catch (error) {
-      statusText = `会话诊断报告复制失败：${error instanceof Error ? error.message : String(error)}`;
-    }
-  }
-
   async function openMenuConversationDetails() {
     if (!conversationMenu) return;
     const conversation = conversationMenu.conversation;
@@ -2237,7 +2657,7 @@
         await loadConversation(conversation.id);
       }
       activeSection = "messages";
-      inspectorTab = conversation.id.startsWith("group:") ? "members" : "details";
+      inspectorTab = "details";
       inspectorOpen = true;
       statusText = `已打开会话详情：${conversationDisplayTitle(conversation, peers, contactMetadata)}`;
     } catch (error) {
@@ -2257,13 +2677,6 @@
     const conversationId = conversationMenu.conversation.id;
     conversationMenu = null;
     await toggleConversationMuted(conversationId);
-  }
-
-  async function toggleMenuConversationArchived() {
-    if (!conversationMenu) return;
-    const conversationId = conversationMenu.conversation.id;
-    conversationMenu = null;
-    await toggleConversationArchived(conversationId);
   }
 
   async function markConversationReadById(conversationId: string) {
@@ -2336,13 +2749,6 @@
     confirmDeleteConversation(conversationId, conversationTitleFor(conversationId));
   }
 
-  async function exportMenuConversation() {
-    if (!conversationMenu) return;
-    const conversation = conversationMenu.conversation;
-    conversationMenu = null;
-    await exportConversation(conversation.id, conversationDisplayTitle(conversation, peers, contactMetadata));
-  }
-
   async function clearConversationHistory(conversationId: string) {
     try {
       const cleared = await clearConversationMessages(conversationId);
@@ -2352,8 +2758,6 @@
         conversationSearchResults = [];
         focusedMessageId = "";
       }
-      searchResults = searchResults.filter((message) => message.conversation_id !== conversationId);
-      favoriteMessages = favoriteMessages.filter((message) => message.conversation_id !== conversationId);
       pinnedMessages = pinnedMessages.filter((message) => message.conversation_id !== conversationId);
       todoMessages = todoMessages.filter((message) => message.conversation_id !== conversationId);
       outboxMessages = outboxMessages.filter((message) => message.conversation_id !== conversationId);
@@ -2376,13 +2780,6 @@
 
   async function clearActiveConversationMessages() {
     confirmClearConversationHistory(activeConversation, activeConversationTitle || activeConversation);
-  }
-
-  async function clearMenuConversationMessages() {
-    if (!conversationMenu) return;
-    const conversation = conversationMenu.conversation;
-    const title = conversationDisplayTitle(conversation, peers, contactMetadata);
-    confirmClearConversationHistory(conversation.id, title);
   }
 
   async function handleTrustPeer(peer: PeerProfile | null = activePeer) {
@@ -2434,7 +2831,7 @@
     notificationReady = granted;
     statusText = granted ? "系统通知已开启" : "系统通知授权被拒绝";
     if (granted) {
-      sendNotification({ title: "灵犀内网通", body: "系统通知已开启" });
+      sendNotification({ title: "iim", body: "系统通知已开启" });
     }
   }
 
@@ -2450,9 +2847,37 @@
     statusText = trayStatus;
   }
 
+  async function minimizeAppWindow() {
+    if (!hasTauriRuntime()) return;
+    await getCurrentWindow().minimize();
+  }
+
+  async function toggleAppWindowMaximized() {
+    if (!hasTauriRuntime()) return;
+    const appWindow = getCurrentWindow();
+    const maximized = await appWindow.isMaximized();
+    if (maximized) {
+      await appWindow.unmaximize();
+    } else {
+      await appWindow.maximize();
+    }
+    windowMaximized = !maximized;
+  }
+
+  async function closeAppWindow() {
+    if (!hasTauriRuntime()) return;
+    await getCurrentWindow().close();
+  }
+
   async function refreshStorageOverview() {
-    storageOverview = await getStorageOverview();
-    statusText = "存储信息已刷新";
+    if (storageOverviewLoading) return;
+    storageOverviewLoading = true;
+    try {
+      storageOverview = await getStorageOverview();
+      statusText = "存储信息已刷新";
+    } finally {
+      storageOverviewLoading = false;
+    }
   }
 
   async function clearClipboardStagingNow() {
@@ -2479,10 +2904,10 @@
   async function chooseAndMigrateStorageDirectory() {
     if (storageMigrationActive) return;
     try {
-      const selected = await open({
+      const selected = await openDialog({
         directory: true,
         multiple: false,
-        title: "选择新的灵犀内网通数据目录"
+        title: "选择新的 iim 数据目录"
       });
       if (!selected || Array.isArray(selected)) return;
       storageMigrationActive = true;
@@ -2540,7 +2965,7 @@
 
   function transferTaskDiagnosticReport(task: TransferTask) {
     return [
-      "灵犀内网通传输记录",
+      "iim 传输记录",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `任务 ID：${task.id}`,
       `会话：${task.conversationId}`,
@@ -2695,7 +3120,8 @@
     appMenu = null;
     messageMenu = {
       ...clampContextMenuPosition(event, 190, 290),
-      message
+      message,
+      page: "primary"
     };
     focusContextMenuAfterRender();
   }
@@ -2782,8 +3208,6 @@
         if (updated.conversation_id === activeConversation) {
           upsertMessage(updated);
         }
-        favoriteMessages = syncFavoriteMessageList(favoriteMessages, updated);
-        searchResults = replaceMessageInList(searchResults, updated);
         conversationSearchResults = replaceMessageInList(conversationSearchResults, updated);
       }
       statusText = `已收藏 ${targets.length} 条消息`;
@@ -2809,7 +3233,6 @@
           upsertMessage(updated);
           pinnedMessages = syncPinnedMessageList(pinnedMessages, updated, true);
         }
-        searchResults = replaceMessageInList(searchResults, updated);
         conversationSearchResults = replaceMessageInList(conversationSearchResults, updated);
       }
       statusText = `已置顶 ${targets.length} 条消息`;
@@ -2839,7 +3262,6 @@
           upsertMessage(updated);
         }
         todoMessages = syncTodoMessageList(todoMessages, updated, true);
-        searchResults = replaceMessageInList(searchResults, updated);
         conversationSearchResults = replaceMessageInList(conversationSearchResults, updated);
       }
       statusText = `已加入待办 ${targets.length} 条消息`;
@@ -2860,6 +3282,7 @@
     forwardingMessage = null;
     forwardingMessages = [...selectedForwardableMessages];
     forwardQuery = "";
+    forwardTargetConversationId = "";
     messageMenu = null;
   }
 
@@ -2946,9 +3369,13 @@
     focusContextMenuAfterRender();
   }
 
-  function toggleThemeFromAppMenu() {
-    appMenu = null;
-    toggleThemePreference();
+  async function refreshTrustedPeerList() {
+    try {
+      trustedPeers = await listTrustedPeers();
+      trustStatus = `已刷新 ${trustedPeers.length} 条设备信任记录`;
+    } catch (error) {
+      trustStatus = error instanceof Error ? error.message : String(error);
+    }
   }
 
   async function minimizeToTrayFromAppMenu() {
@@ -3000,10 +3427,12 @@
 
   async function saveProfileExtras() {
     try {
-      await saveAppPreferencesPatch({ profile_signature: profileSignature, avatar_label: avatarLabel });
+      await saveAppPreferencesPatch({ profile_signature: profileSignature, avatar_label: avatarLabel, avatar_image: avatarImage });
       statusText = "个人签名和头像已保存";
+      return true;
     } catch (error) {
       statusText = `个人扩展资料保存失败：${errorMessage(error)}`;
+      return false;
     }
   }
 
@@ -3128,31 +3557,6 @@
     }
   }
 
-  async function retryOutboxMessages() {
-    const targets = outboxMessages.filter((message) => !message.recalled && ["queued", "sending", "failed"].includes(message.status));
-    if (targets.length === 0) {
-      statusText = "发件箱暂无可重试消息";
-      return;
-    }
-
-    const results = await Promise.allSettled(targets.map((message) => retryMessage(message)));
-    let successCount = 0;
-    for (const result of results) {
-      if (result.status !== "fulfilled") continue;
-      successCount += 1;
-      const retried = result.value;
-      if (retried.conversation_id === activeConversation) {
-        upsertMessage(retried);
-      }
-      outboxMessages = syncOutboxMessageList(outboxMessages, retried);
-    }
-    const failedCount = results.length - successCount;
-    statusText = failedCount > 0
-      ? `发件箱已重试 ${successCount} 条，${failedCount} 条失败`
-      : `发件箱已重试 ${successCount} 条消息`;
-    chatNotice = statusText;
-  }
-
   function quoteContextMessage() {
     if (!messageMenu) return;
     const message = messageMenu.message;
@@ -3182,6 +3586,7 @@
     forwardingMessage = message;
     forwardingMessages = [];
     forwardQuery = "";
+    forwardTargetConversationId = "";
     messageMenu = null;
   }
 
@@ -3189,6 +3594,7 @@
     forwardingMessage = null;
     forwardingMessages = [];
     forwardQuery = "";
+    forwardTargetConversationId = "";
   }
 
   async function confirmForwardMessage(conversationId: string) {
@@ -3230,8 +3636,6 @@
       if (updated.conversation_id === activeConversation) {
         upsertMessage(updated);
       }
-      favoriteMessages = syncFavoriteMessageList(favoriteMessages, updated);
-      searchResults = replaceMessageInList(searchResults, updated);
       statusText = updated.favorited ? "消息已收藏" : "已取消收藏";
     } catch (error) {
       statusText = `${actionLabel}失败：${error instanceof Error ? error.message : String(error)}`;
@@ -3254,7 +3658,6 @@
         upsertMessage(updated);
       }
       todoMessages = syncTodoMessageList(todoMessages, updated, !todo);
-      searchResults = replaceMessageInList(searchResults, updated);
       conversationSearchResults = replaceMessageInList(conversationSearchResults, updated);
       statusText = todo ? "已完成消息待办" : "已加入消息待办";
       chatNotice = statusText;
@@ -3319,8 +3722,6 @@
       if (updated.conversation_id === activeConversation) {
         upsertMessage(updated);
       }
-      favoriteMessages = syncFavoriteMessageList(favoriteMessages, updated);
-      searchResults = replaceMessageInList(searchResults, updated);
       statusText = active ? "已添加消息回应" : "已取消消息回应";
     } catch (error) {
       statusText = `回应失败：${error instanceof Error ? error.message : String(error)}`;
@@ -3337,8 +3738,6 @@
       if (revoked.conversation_id === activeConversation) {
         upsertMessage(revoked);
       }
-      favoriteMessages = syncFavoriteMessageList(favoriteMessages, revoked);
-      searchResults = replaceMessageInList(searchResults, revoked);
       statusText = "消息已撤回";
     } catch (error) {
       statusText = `撤回失败：${error instanceof Error ? error.message : String(error)}`;
@@ -3371,7 +3770,8 @@
 
   function openContextMessageDetails() {
     if (!messageMenu) return;
-    inspectorTab = activeConversation.startsWith("group:") ? "members" : "details";
+    inspectorPeer = null;
+    inspectorTab = "details";
     inspectorOpen = true;
     activeSection = "messages";
     messageMenu = null;
@@ -3439,7 +3839,7 @@
 
   function messageDetailAuditReport(message: ChatMessage) {
     const lines = [
-      "灵犀内网通消息审计",
+      "iim 消息审计",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `消息 ID：${message.id}`,
       `会话：${message.conversation_id}`,
@@ -3678,9 +4078,10 @@
       return;
     }
     const drafts = [...pendingFileDrafts];
-    const sent = await sendSelectedPaths(drafts.map((item) => item.path), "待发送文件");
+    const sent = await sendSelectedPaths(drafts.map((item) => item.path), "待发送文件", "", replyQuote);
     if (sent) {
       pendingFileDrafts = [];
+      replyQuote = null;
     }
   }
 
@@ -3738,7 +4139,7 @@
       return;
     }
 
-    const selected = await open({
+    const selected = await openDialog({
       multiple: true,
       directory: false,
       title: "选择要发送的文件"
@@ -3760,7 +4161,7 @@
       return;
     }
 
-    const selected = await open({
+    const selected = await openDialog({
       multiple: true,
       directory: true,
       title: "选择要递归发送的文件夹"
@@ -3771,10 +4172,10 @@
     queuePathDrafts(paths, "文件夹", true);
   }
 
-  async function sendSelectedPaths(paths: string[], sourceLabel: string): Promise<boolean> {
+  async function sendSelectedPaths(paths: string[], sourceLabel: string, text = "", quote: MessageQuote | null = null): Promise<boolean> {
     let message: ChatMessage;
     try {
-      message = await sendFiles(activeConversation, paths);
+      message = await sendFiles(activeConversation, paths, text, quote);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       statusText = `${sourceLabel}发送失败：${reason}`;
@@ -4036,14 +4437,14 @@
   class:welcome-home={showMessageShell && !activeConversation}
   class:workspace-layout={!showMessageShell}
   class:inspector-visible={showInspector}
-  class="app"
+  class="app ui-v2"
 >
   {#if bootstrapping}
     <section class="startup-progress" role="status" aria-label="启动进度" aria-live="polite">
       <div class="startup-progress-card">
-        <span class="startup-logo">灵</span>
+        <span class="startup-logo">i</span>
         <div>
-          <strong>灵犀内网通</strong>
+          <strong>iim</strong>
           <p>{bootLabel}</p>
         </div>
         <progress value={bootProgress} max="100">{bootProgress}%</progress>
@@ -4051,14 +4452,37 @@
       </div>
     </section>
   {/if}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <header
+    class="app-titlebar"
+    data-tauri-drag-region
+    aria-label="应用标题栏"
+    on:dblclick={toggleAppWindowMaximized}
+  >
+    <div class="app-window-controls" aria-label="窗口控制">
+      <button type="button" title="最小化" aria-label="最小化窗口" on:click={minimizeAppWindow}>
+        <Minus size={15} />
+      </button>
+      <button
+        type="button"
+        title={windowMaximized ? "还原" : "最大化"}
+        aria-label={windowMaximized ? "还原窗口" : "最大化窗口"}
+        on:click={toggleAppWindowMaximized}
+      >
+        {#if windowMaximized}<Minimize2 size={14} />{:else}<Maximize2 size={14} />{/if}
+      </button>
+      <button class="window-close-button" type="button" title="关闭" aria-label="关闭窗口" on:click={closeAppWindow}>
+        <X size={15} />
+      </button>
+    </div>
+  </header>
   {#if !appLocked}
   <Rail
     {activeSection}
-    {dark}
     unreadCount={totalUnreadCount}
     avatarLabel={railAvatarLabel}
+    {avatarImage}
     onSelect={selectSection}
-    onToggleTheme={toggleThemePreference}
     onOpenProfileMenu={openAppProfileMenu}
   />
 
@@ -4081,9 +4505,7 @@
       {privacyMode}
       onSelectConversation={loadConversation}
       onOpenPeerDetails={openPeerDetails}
-      onSearchMessages={searchMessages}
-      onOpenMessageResult={openMessageResult}
-      onOpenConversationSearch={openSidebarConversationSearch}
+      {refreshingPeers}
       onRefreshPeers={refreshPeers}
       onMarkAllRead={markEveryConversationRead}
       onConversationContext={openConversationContextMenu}
@@ -4102,7 +4524,6 @@
       {transferTasks}
       {draft}
       notice={chatNotice || (statusText.startsWith("已清空 ") ? "" : statusText)}
-      {quickReplies}
       isGroup={activeConversation.startsWith("group:")}
       memberCount={activeGroupMemberCount}
       {messageSenderLabels}
@@ -4114,10 +4535,9 @@
       {pendingFileDrafts}
       {replyQuote}
       {conversationSearchOpen}
+      {inspectorOpen}
       {nudgePulseKey}
-      {conversationSearchFocus}
       {conversationSearchQuery}
-      {conversationSearchDate}
       {conversationSearchResults}
       {pinnedMessages}
       {todoMessages}
@@ -4143,27 +4563,32 @@
       onSendPendingFiles={sendPendingFileDrafts}
       onStartScreenshot={startScreenshotWorkflow}
       onShowDetails={() => {
-        inspectorTab = activeConversation.startsWith("group:") ? "members" : "details";
-        inspectorOpen = true;
+        const nextTab = "details";
+        conversationSearchOpen = false;
+        inspectorPeer = null;
+        if (inspectorOpen) {
+          inspectorOpen = false;
+        } else {
+          inspectorTab = nextTab;
+          inspectorOpen = true;
+        }
       }}
+      onOpenPeerDetails={openPeerDetails}
       onShowTransfers={() => {
+        conversationSearchOpen = false;
+        inspectorPeer = null;
+        inspectorOpen = !(inspectorOpen && inspectorTab === "transfers");
         inspectorTab = "transfers";
-        inspectorOpen = true;
       }}
       onOpenTransfer={openTransfer}
       onCopyAttachmentFiles={copyAttachmentFiles}
       onRetryMessage={resendMessage}
-      onMarkConversationRead={() => markConversationReadById(activeConversation)}
-      onMarkConversationUnread={() => markConversationUnreadById(activeConversation)}
       onTogglePin={() => toggleConversationPinned(activeConversation)}
       onToggleMute={() => toggleConversationMuted(activeConversation)}
       onToggleArchive={() => toggleConversationArchived(activeConversation)}
       onToggleConversationSearch={toggleConversationSearch}
-      onOpenConversationDateJump={openConversationDateJump}
       onConversationSearchQueryChange={(value) => (conversationSearchQuery = value)}
-      onConversationSearchDateChange={(value) => (conversationSearchDate = value)}
       onRunConversationSearch={runConversationSearch}
-      onRunConversationDateJump={jumpConversationDate}
       onFocusConversationSearchResult={focusConversationSearchResult}
       onClearConversationSearch={clearConversationSearchState}
       onLoadOlderMessages={loadOlderMessages}
@@ -4188,13 +4613,12 @@
           <div class="welcome-copy">
             <span class="welcome-kicker">
               <ShieldCheck size={15} />
-              局域网直连 · 无中间服务器
+              局域网直连
             </span>
             <h1>
-              <span>内网消息</span>
-              <span>即刻直连</span>
+              <span>会话</span>
             </h1>
-            <p>发现同网段设备、发起直连会话、继续文件传输，都在这个工作台完成。</p>
+            <p>发现设备、处理未读、继续传输和调整网络状态，都从这里进入。</p>
           </div>
           <div class:warning={Boolean(networkWarning)} class="welcome-dashboard" aria-label="直连态势">
             <header>
@@ -4279,10 +4703,16 @@
                 <small>{reachablePeerCount} 台设备可联系，{unavailablePeerCount} 台暂不可达</small>
               </span>
             </button>
-            <button type="button" on:click={refreshPeers}>
+            <button
+              class:loading={refreshingPeers}
+              type="button"
+              aria-busy={refreshingPeers}
+              disabled={refreshingPeers}
+              on:click={refreshPeers}
+            >
               <RefreshCw size={15} />
               <span>
-                <strong>重新发现</strong>
+                <strong>{refreshingPeers ? "发现中" : "重新发现"}</strong>
                 <small>刷新 UDP 发现结果和在线状态</small>
               </span>
             </button>
@@ -4306,9 +4736,17 @@
               <UserRound size={15} />
               查看联系人
             </button>
-            <button class="tool-button" type="button" aria-label="刷新联系人" on:click={refreshPeers}>
+            <button
+              class:loading={refreshingPeers}
+              class="tool-button refresh-action"
+              type="button"
+              aria-label="刷新联系人"
+              aria-busy={refreshingPeers}
+              disabled={refreshingPeers}
+              on:click={refreshPeers}
+            >
               <RefreshCw size={15} />
-              刷新联系人
+              {refreshingPeers ? "刷新中" : "刷新联系人"}
             </button>
             <button class="tool-button" type="button" aria-label="打开设置" on:click={() => (activeSection = "settings")}>
               <Settings size={15} />
@@ -4347,13 +4785,6 @@
       {self}
       {focusedContactPeerId}
       {contactMetadata}
-      {selectedPeerIds}
-      {searchResults}
-      {favoriteMessages}
-      {todoMessages}
-      {outboxMessages}
-      conversationTitles={conversationTitleMap}
-      {query}
       {settings}
       {transportConfig}
       {transferTasks}
@@ -4373,6 +4804,7 @@
       {loginPasswordReady}
       {profileSignature}
       {avatarLabel}
+      {avatarImage}
       {requireContactForMessaging}
       {statusText}
       {trustStatus}
@@ -4384,24 +4816,16 @@
       {storageMigrationActive}
       {trustedPeers}
       {settingsTab}
-      onTogglePeer={togglePeer}
+      {refreshingPeers}
       onContactMetadataChange={updateContactDraft}
       onSaveContactMetadata={saveContactMetadata}
       onContactContext={openContactContextMenu}
       onOpenSettingsTab={openSettings}
       onSelectConversation={loadConversation}
-      onOpenMessageResult={openMessageResult}
-      onMessageContext={openMessageContextMenu}
-      onRetryOutboxMessages={retryOutboxMessages}
-      onCreateGroup={handleCreateGroup}
+      onCreateGroup={openCreateGroupDialog}
       onRefreshPeers={refreshPeers}
-      onSearch={handleSearch}
-      onRefreshFavorites={async () => {
-        const refreshed = await refreshMessageCollections();
-        statusText = `已刷新消息资料：收藏 ${refreshed.favorites.length} 条，待办 ${refreshed.todos.length} 条，发件箱 ${refreshed.outbox.length} 条`;
-      }}
-      onCopyNetworkDiagnostics={copyNetworkDiagnostics}
       onTrustPeer={handleTrustPeer}
+      onRefreshTrustedPeers={refreshTrustedPeerList}
       onRemoveTrustedPeer={forgetTrustedPeer}
       onProfileNameChange={(value) => (profileName = value)}
       onProfileHostnameChange={(value) => (profileHostname = value)}
@@ -4424,14 +4848,13 @@
       onSaveLoginSettings={saveLoginSettings}
       onProfileSignatureChange={(value) => (profileSignature = value)}
       onAvatarLabelChange={(value) => (avatarLabel = value)}
+      onAvatarImageChange={(value) => (avatarImage = value)}
       onSaveProfileExtras={saveProfileExtras}
       onRefreshStorage={refreshStorageOverview}
       onMigrateStorageDirectory={chooseAndMigrateStorageDirectory}
       onClearStagedFiles={clearClipboardStaging}
       onOpenStorage={openStorage}
       onCopyStoragePath={copyStoragePath}
-      onCopyStorageDiagnostics={copyStorageDiagnostics}
-      onCopyTrustedFingerprint={copyIdentityValue}
       onOpenTransfer={openTransfer}
       onDeleteTransfer={confirmDeleteTransfer}
       onCancelTransfer={stopTransfer}
@@ -4448,6 +4871,7 @@
     conversation={activeConversationSummary}
     {settings}
     {activePeer}
+    focusedPeer={inspectorPeer}
     {messages}
     selfPeerId={self?.peer_id ?? ""}
     {contactMetadata}
@@ -4456,6 +4880,7 @@
     isGroup={activeConversation.startsWith("group:")}
     {groupNameDraft}
     {groupAnnouncementDraft}
+    {groupAnnouncementPinnedDraft}
     {groupMemberDraftIds}
     canManageGroup={activeGroupCanManage}
     {transferTasks}
@@ -4466,10 +4891,14 @@
     {trustStatus}
     {statusText}
     onTabChange={(value) => (inspectorTab = value)}
-    onCopyNetworkDiagnostics={copyNetworkDiagnostics}
-    onTrustPeer={() => handleTrustPeer(activePeer)}
+    onClose={() => {
+      inspectorOpen = false;
+      inspectorPeer = null;
+    }}
+    onTrustPeer={() => handleTrustPeer(inspectorPeer ?? activePeer)}
     onGroupNameChange={(value) => (groupNameDraft = value)}
     onGroupAnnouncementChange={(value) => (groupAnnouncementDraft = value)}
+    onSaveGroupAnnouncement={saveGroupAnnouncement}
     onToggleGroupMember={toggleGroupMemberDraft}
     onSaveGroup={saveActiveGroup}
     onExportConversation={exportActiveConversation}
@@ -4486,7 +4915,6 @@
     onClearStagedFiles={clearClipboardStaging}
     onOpenStorage={openStorage}
     onCopyStoragePath={copyStoragePath}
-    onCopyStorageDiagnostics={copyStorageDiagnostics}
     onCopyIdentityValue={copyIdentityValue}
     onOpenDirectConversation={(peerId) => loadConversation(`direct:${peerId}`)}
     onContactMetadataChange={updateContactDraft}
@@ -4504,10 +4932,10 @@
         aria-label="登录解锁"
       >
         <form class="login-lock-form" on:submit|preventDefault={unlockApp}>
-          <span class="startup-logo">灵</span>
+          <span class="startup-logo">i</span>
           <div>
             <span class="eyebrow">本机登录</span>
-            <h2>灵犀内网通已锁定</h2>
+            <h2>iim 已锁定</h2>
             <p>请输入本机登录密码，解锁后继续内网直连会话。</p>
           </div>
           <label class="field">
@@ -4553,7 +4981,7 @@
   {#if messageMenu}
     <div
       bind:this={contextMenuElement}
-      class="context-menu"
+      class="context-menu message-context-menu"
       style={`left: ${messageMenu.x}px; top: ${messageMenu.y}px;`}
       role="menu"
       aria-label="消息快捷菜单"
@@ -4561,11 +4989,7 @@
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (messageMenu = null))}
     >
-      <button type="button" role="menuitem" on:click={copyContextMessage}>
-        <Copy size={13} />
-        复制消息
-      </button>
-      {#if !messageMenu.message.recalled}
+      {#if messageMenu.page === "primary" && !messageMenu.message.recalled}
         <div class="reaction-menu-row" role="group" aria-label="快捷回应">
           {#each quickReactions as reaction}
             <button
@@ -4580,55 +5004,99 @@
             </button>
           {/each}
         </div>
-        <button type="button" role="menuitem" on:click={quoteContextMessage}>
-          <Reply size={13} />
-          引用回复
-        </button>
-        <button type="button" role="menuitem" on:click={openForwardContextMessage}>
-          <UploadCloud size={13} />
-          转发消息
-        </button>
-        <button type="button" role="menuitem" on:click={() => startMessageSelection(messageMenu?.message)}>
-          <CheckSquare size={13} />
-          多选消息
-        </button>
-        <button type="button" role="menuitem" on:click={toggleFavoriteContextMessage}>
-          <Star size={13} />
-          {messageMenu.message.favorited ? "取消收藏" : "收藏消息"}
-        </button>
-        <button type="button" role="menuitem" on:click={toggleTodoContextMessage}>
-          <CheckSquare size={13} />
-          {isMessageTodo(messageMenu.message) ? "完成待办" : "加入待办"}
-        </button>
-        <button type="button" role="menuitem" on:click={togglePinContextMessage}>
-          {#if isMessagePinned(messageMenu.message)}<PinOff size={13} />{:else}<Pin size={13} />{/if}
-          {isMessagePinned(messageMenu.message) ? "取消置顶" : "置顶消息"}
-        </button>
       {/if}
-      {#if canRetryLocalMessage(messageMenu.message)}
-        <button type="button" role="menuitem" on:click={resendContextMessage}>
-          <RefreshCw size={13} />
-          重新发送
-        </button>
+      {#if messageMenu.page === "primary"}
+        <div class="context-menu-section message-primary-actions" role="group" aria-label="消息操作">
+          <button type="button" role="menuitem" aria-label="复制消息" on:click={copyContextMessage}>
+            <Copy size={13} />
+            复制
+          </button>
+          {#if !messageMenu.message.recalled}
+            <button type="button" role="menuitem" aria-label="引用回复" on:click={quoteContextMessage}>
+              <Reply size={13} />
+              引用
+            </button>
+            <button type="button" role="menuitem" aria-label="转发消息" on:click={openForwardContextMessage}>
+              <UploadCloud size={13} />
+              转发
+            </button>
+          {/if}
+          <button
+            type="button"
+            role="menuitem"
+            aria-label="更多消息操作"
+            on:click={() => (messageMenu = messageMenu ? { ...messageMenu, page: "more" } : null)}
+          >
+            <MoreHorizontal size={15} />
+            更多
+          </button>
+        </div>
+      {:else}
+        <div class="context-menu-section message-more-actions" role="group" aria-label="更多消息操作">
+          <button
+            type="button"
+            role="menuitem"
+            aria-label="返回常用操作"
+            on:click={() => (messageMenu = messageMenu ? { ...messageMenu, page: "primary" } : null)}
+          >
+            <ChevronLeft size={13} />
+            返回
+          </button>
+          {#if !messageMenu.message.recalled}
+            <button
+              type="button"
+              role="menuitem"
+              aria-label={messageMenu.message.favorited ? "取消收藏" : "收藏消息"}
+              on:click={toggleFavoriteContextMessage}
+            >
+              <Star size={13} />
+              {messageMenu.message.favorited ? "取消收藏" : "收藏"}
+            </button>
+            <button type="button" role="menuitem" aria-label="多选消息" on:click={() => startMessageSelection(messageMenu?.message)}>
+              <CheckSquare size={13} />
+              多选
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              aria-label={isMessageTodo(messageMenu.message) ? "完成待办" : "加入待办"}
+              on:click={toggleTodoContextMessage}
+            >
+              <CheckSquare size={13} />
+              {isMessageTodo(messageMenu.message) ? "完成待办" : "加入待办"}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              aria-label={isMessagePinned(messageMenu.message) ? "取消置顶" : "置顶消息"}
+              on:click={togglePinContextMessage}
+            >
+              {#if isMessagePinned(messageMenu.message)}<PinOff size={13} />{:else}<Pin size={13} />{/if}
+              {isMessagePinned(messageMenu.message) ? "取消置顶" : "置顶消息"}
+            </button>
+          {/if}
+          {#if canRetryLocalMessage(messageMenu.message)}
+            <button type="button" role="menuitem" aria-label="重新发送" on:click={resendContextMessage}>
+              <RefreshCw size={13} />
+              重发
+            </button>
+          {/if}
+          {#if messageMenu.message.sender_id === self?.peer_id && !messageMenu.message.recalled}
+            <button type="button" role="menuitem" aria-label="撤回消息" on:click={revokeContextMessage}>
+              <Reply size={13} />
+              撤回
+            </button>
+          {/if}
+          <button type="button" role="menuitem" aria-label="消息详情" on:click={openContextMessageInfo}>
+            <Info size={13} />
+            详情
+          </button>
+          <button class="danger" type="button" role="menuitem" aria-label="删除消息" on:click={deleteContextMessage}>
+            <Trash2 size={13} />
+            删除
+          </button>
+        </div>
       {/if}
-      {#if messageMenu.message.sender_id === self?.peer_id && !messageMenu.message.recalled}
-        <button type="button" role="menuitem" on:click={revokeContextMessage}>
-          <Reply size={13} />
-          撤回消息
-        </button>
-      {/if}
-      <button type="button" role="menuitem" on:click={openContextMessageInfo}>
-        <Info size={13} />
-        消息详情
-      </button>
-      <button type="button" role="menuitem" on:click={openContextMessageDetails}>
-        <MessageSquareText size={13} />
-        会话详情
-      </button>
-      <button class="danger" type="button" role="menuitem" on:click={deleteContextMessage}>
-        <Trash2 size={13} />
-        删除消息
-      </button>
     </div>
   {/if}
 
@@ -4643,21 +5111,9 @@
       on:click|stopPropagation
       on:keydown={(event) => handleContextMenuKeydown(event, () => (conversationMenu = null))}
     >
-      <button type="button" role="menuitem" on:click={openConversationFromMenu}>
-        <MessageSquareText size={13} />
-        打开会话
-      </button>
       <button type="button" role="menuitem" on:click={openMenuConversationDetails}>
         <Info size={13} />
         会话详情
-      </button>
-      <button type="button" role="menuitem" on:click={copyConversationIdFromMenu}>
-        <Copy size={13} />
-        复制会话 ID
-      </button>
-      <button type="button" role="menuitem" on:click={copyConversationDiagnosticFromMenu}>
-        <FileText size={13} />
-        复制会话诊断
       </button>
       <button type="button" role="menuitem" on:click={toggleMenuConversationPinned}>
         {#if conversationMenu.conversation.pinned}<PinOff size={13} />{:else}<Pin size={13} />{/if}
@@ -4666,10 +5122,6 @@
       <button type="button" role="menuitem" on:click={toggleMenuConversationMuted}>
         {#if conversationMenu.conversation.muted}<Volume2 size={13} />{:else}<BellOff size={13} />{/if}
         {conversationMenu.conversation.muted ? "取消免打扰" : "免打扰"}
-      </button>
-      <button type="button" role="menuitem" on:click={toggleMenuConversationArchived}>
-        <Archive size={13} />
-        {conversationMenu.conversation.archived ? "取消归档" : "归档"}
       </button>
       {#if conversationMenu.conversation.unread_count > 0}
         <button type="button" role="menuitem" on:click={markMenuConversationRead}>
@@ -4682,14 +5134,6 @@
           标为未读
         </button>
       {/if}
-      <button type="button" role="menuitem" on:click={exportMenuConversation}>
-        <FileText size={13} />
-        导出聊天记录
-      </button>
-      <button class="danger" type="button" role="menuitem" on:click={clearMenuConversationMessages}>
-        <Trash2 size={13} />
-        清空聊天记录
-      </button>
       <button class="danger" type="button" role="menuitem" on:click={deleteMenuConversation}>
         <Trash2 size={13} />
         删除会话
@@ -4716,10 +5160,6 @@
         <UserRound size={13} />
         联系人详情
       </button>
-      <button type="button" role="menuitem" on:click={copyContactDiagnosticFromMenu}>
-        <FileText size={13} />
-        复制联系人诊断
-      </button>
       <button type="button" role="menuitem" on:click={toggleContactFavoriteFromMenu}>
         <Star size={13} />
         {contactMetadataFor(contactMenu.peer.peer_id).favorite ? "取消星标" : "星标联系人"}
@@ -4727,37 +5167,6 @@
       <button class="danger" type="button" role="menuitem" on:click={toggleContactBlockedFromMenu}>
         <Ban size={13} />
         {contactMetadataFor(contactMenu.peer.peer_id).blocked ? "取消阻止" : "阻止联系人"}
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={`复制${displayPeerName(contactMenu.peer)}设备 ID`}
-        title={`复制${displayPeerName(contactMenu.peer)}设备 ID`}
-        on:click={copyContactDeviceIdFromMenu}
-      >
-        <Copy size={13} />
-        复制设备 ID
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={`复制${displayPeerName(contactMenu.peer)}端点`}
-        title={`复制${displayPeerName(contactMenu.peer)}端点`}
-        disabled={contactMenu.peer.endpoints.length === 0}
-        on:click={copyContactEndpointFromMenu}
-      >
-        <Copy size={13} />
-        复制端点
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        aria-label={`复制${displayPeerName(contactMenu.peer)}指纹`}
-        title={`复制${displayPeerName(contactMenu.peer)}指纹`}
-        on:click={copyContactFingerprintFromMenu}
-      >
-        <ShieldCheck size={13} />
-        复制指纹
       </button>
     </div>
   {/if}
@@ -4820,11 +5229,12 @@
       on:keydown={(event) => handleContextMenuKeydown(event, () => (appMenu = null))}
     >
       <div class="profile-menu-card" role="presentation">
-        <span class="profile-menu-avatar">{railAvatarLabel}</span>
+        <span class="profile-menu-avatar">
+          {#if avatarImage}<img src={avatarImage} alt="" />{:else}{railAvatarLabel}{/if}
+        </span>
         <div>
           <strong>{displaySelfName}</strong>
           <small>{profileSignature || "内网直连已就绪"}</small>
-          <em>{self?.hostname || "本机设备"} · {self?.endpoints[0] || `${transportConfig.listen_port}/QUIC`}</em>
         </div>
         <span class={`profile-menu-status ${profileStatus}`}>{profileStatusText}</span>
       </div>
@@ -4851,18 +5261,6 @@
         <UserRound size={13} />
         设置头像
       </button>
-      <button type="button" role="menuitem" on:click={refreshPeersFromAppMenu}>
-        <RefreshCw size={13} />
-        刷新联系人
-      </button>
-      <button type="button" role="menuitem" on:click={openContactsFromAppMenu}>
-        <UserRound size={13} />
-        联系人
-      </button>
-      <button type="button" role="menuitem" on:click={openFilesFromAppMenu}>
-        <UploadCloud size={13} />
-        文件传输
-      </button>
       <button type="button" role="menuitem" on:click={openSettingsFromAppMenu}>
         <Settings size={13} />
         打开设置
@@ -4870,10 +5268,6 @@
       <button type="button" role="menuitem" on:click={minimizeToTrayFromAppMenu}>
         <Minimize2 size={13} />
         最小化到托盘
-      </button>
-      <button type="button" role="menuitem" on:click={toggleThemeFromAppMenu}>
-        <Palette size={13} />
-        {dark ? "浅色主题" : "深色主题"}
       </button>
     </div>
   {/if}
@@ -4917,93 +5311,23 @@
         aria-label="消息详情"
         tabindex="-1"
         on:click|stopPropagation
-        on:keydown={(event) => {
-          if (event.key === "Escape") closeMessageDetails();
-        }}
+        on:keydown={(event) => handleModalKeydown(event, closeMessageDetails)}
       >
         <header>
-          <div>
-            <span class="eyebrow">详情</span>
-            <h2>消息详情</h2>
-          </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeMessageDetails}>
+          <h2>消息详情</h2>
+          <button use:focusWhenMounted class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeMessageDetails}>
             <X size={15} />
           </button>
         </header>
         <div class="message-detail-content">
-          <dl class="message-detail-grid">
+          <section class="message-detail-summary" aria-label="消息概览">
+            <span class="message-detail-avatar" aria-hidden="true">{messageSenderLabel(detailMessage).slice(0, 1)}</span>
             <div>
-              <dt>消息 ID</dt>
-              <dd>{detailMessage.id}</dd>
+              <strong>{messageSenderLabel(detailMessage)}</strong>
+              <span>{new Date(detailMessage.created_at).toLocaleString("zh-CN")}</span>
             </div>
-            <div>
-              <dt>方向</dt>
-              <dd>{messageDirectionLabel(detailMessage)}</dd>
-            </div>
-            <div>
-              <dt>会话</dt>
-              <dd>{detailMessage.conversation_id}</dd>
-            </div>
-            <div>
-              <dt>发送人</dt>
-              <dd>{messageSenderLabel(detailMessage)}</dd>
-            </div>
-            <div>
-              <dt>时间</dt>
-              <dd>{new Date(detailMessage.created_at).toLocaleString("zh-CN")}</dd>
-            </div>
-            <div>
-              <dt>状态</dt>
-              <dd>{messageStatusLabel(detailMessage.status)}</dd>
-            </div>
-            <div>
-              <dt>发送尝试</dt>
-              <dd>{messageSendAttemptLabel(detailMessage)}</dd>
-            </div>
-            <div>
-              <dt>最后尝试</dt>
-              <dd>{messageLastAttemptLabel(detailMessage)}</dd>
-            </div>
-            <div>
-              <dt>附件</dt>
-              <dd>{detailMessage.attachments.length} 个</dd>
-            </div>
-            <div>
-              <dt>回应</dt>
-              <dd>{messageReactionSummary(detailMessage)}</dd>
-            </div>
-            <div>
-              <dt>标记</dt>
-              <dd>{messageFlagLabel(detailMessage)}</dd>
-            </div>
-          </dl>
-          <section class="message-detail-audit" aria-label="交付审计">
-            <strong>交付审计</strong>
-            {#each messageDeliveryAuditItems(detailMessage) as item}
-              <div>
-                <span>{item.label}</span>
-                <p>{item.value}</p>
-              </div>
-            {/each}
+            <span class={`message-detail-state status-${detailMessage.status}`}>{messageStatusLabel(detailMessage.status)}</span>
           </section>
-          {#if detailMessage.sender_id === self?.peer_id}
-            <section class="message-detail-recipients" aria-label="逐成员送达">
-              <strong>逐成员送达</strong>
-              {#if messageDeliveryReceiptsLoading}
-                <p class="hint">正在读取送达明细...</p>
-              {:else if messageDeliveryReceipts.length === 0}
-                <p class="hint">没有可审计收件人。</p>
-              {:else}
-                <p class="message-detail-receipt-summary">{messageDeliveryReceiptSummary(messageDeliveryReceipts)}</p>
-                {#each messageDeliveryReceipts as receipt (receipt.peer_id)}
-                  <div>
-                    <span>{messageDeliveryPeerLabel(receipt.peer_id)}</span>
-                    <p>{messageDeliveryReceiptStatus(receipt)}</p>
-                  </div>
-                {/each}
-              {/if}
-            </section>
-          {/if}
           {#if !detailMessage.recalled && detailMessage.body.trim()}
             <div class="message-detail-body">
               <strong>消息正文</strong>
@@ -5053,19 +5377,92 @@
               {/each}
             </div>
           {/if}
+          <details class="message-detail-advanced">
+            <summary>
+              <span>交付与技术信息</span>
+              <small>消息标识、可靠状态与成员回执</small>
+            </summary>
+            <div class="message-detail-advanced-content">
+              <dl class="message-detail-grid">
+                <div>
+                  <dt>消息 ID</dt>
+                  <dd>{detailMessage.id}</dd>
+                </div>
+                <div>
+                  <dt>会话</dt>
+                  <dd>{detailMessage.conversation_id}</dd>
+                </div>
+                <div>
+                  <dt>方向</dt>
+                  <dd>{messageDirectionLabel(detailMessage)}</dd>
+                </div>
+                <div>
+                  <dt>状态</dt>
+                  <dd>{messageStatusLabel(detailMessage.status)}</dd>
+                </div>
+                {#if detailMessage.attachments.length > 0}
+                  <div>
+                    <dt>附件</dt>
+                    <dd>{detailMessage.attachments.length} 个</dd>
+                  </div>
+                {/if}
+                {#if detailMessage.reactions.length > 0}
+                  <div>
+                    <dt>回应</dt>
+                    <dd>{messageReactionSummary(detailMessage)}</dd>
+                  </div>
+                {/if}
+                {#if detailMessage.recalled || detailMessage.favorited}
+                  <div>
+                    <dt>标记</dt>
+                    <dd>{messageFlagLabel(detailMessage)}</dd>
+                  </div>
+                {/if}
+              </dl>
+              <section class="message-detail-audit" aria-label="交付审计">
+                <strong>交付审计</strong>
+                {#each messageDeliveryAuditItems(detailMessage) as item}
+                  <div>
+                    <span>{item.label}</span>
+                    <p>{item.value}</p>
+                  </div>
+                {/each}
+              </section>
+              {#if detailMessage.sender_id === self?.peer_id}
+                <section class="message-detail-recipients" aria-label="逐成员送达">
+                  <strong>逐成员送达</strong>
+                  {#if messageDeliveryReceiptsLoading}
+                    <p class="hint">正在读取送达明细...</p>
+                  {:else if messageDeliveryReceipts.length === 0}
+                    <p class="hint">没有可审计收件人。</p>
+                  {:else}
+                    <p class="message-detail-receipt-summary">{messageDeliveryReceiptSummary(messageDeliveryReceipts)}</p>
+                    {#each messageDeliveryReceipts as receipt (receipt.peer_id)}
+                      <div>
+                        <span>{messageDeliveryPeerLabel(receipt.peer_id)}</span>
+                        <p>{messageDeliveryReceiptStatus(receipt)}</p>
+                      </div>
+                    {/each}
+                  {/if}
+                </section>
+              {/if}
+              <div class="message-detail-technical-actions">
+                <button class="row-action" type="button" on:click={() => copyMessageDetailValue(detailMessage.id, "消息 ID")}>
+                  <Copy size={13} />
+                  复制消息 ID
+                </button>
+                <button class="row-action" type="button" on:click={() => copyMessageDetailValue(detailMessage.conversation_id, "会话 ID")}>
+                  <Copy size={13} />
+                  复制会话 ID
+                </button>
+              </div>
+            </div>
+          </details>
         </div>
         <div class="message-detail-actions">
           <button class="row-action" type="button" on:click={() => copyMessageDetailAuditReport(detailMessage)}>
             <Copy size={13} />
             复制审计报告
-          </button>
-          <button class="row-action" type="button" on:click={() => copyMessageDetailValue(detailMessage.id, "消息 ID")}>
-            <Copy size={13} />
-            复制消息 ID
-          </button>
-          <button class="row-action" type="button" on:click={() => copyMessageDetailValue(detailMessage.conversation_id, "会话 ID")}>
-            <Copy size={13} />
-            复制会话 ID
           </button>
         </div>
         {#if messageDetailStatus}
@@ -5084,34 +5481,107 @@
         aria-label={confirmDialog.title}
         tabindex="-1"
         on:click|stopPropagation
-        on:keydown={(event) => {
-          if (event.key === "Escape") closeConfirmDialog();
-        }}
+        on:keydown={(event) => handleModalKeydown(event, closeConfirmDialog)}
       >
         <header>
-          <div>
-            <span class="eyebrow">危险操作</span>
-            <h2>{confirmDialog.title}</h2>
-          </div>
-          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeConfirmDialog}>
-            <X size={15} />
-          </button>
+          <h2>{confirmDialog.title}</h2>
         </header>
-        <p>{confirmDialog.body}</p>
+        <p class="confirm-dialog-body">{confirmDialog.body}</p>
         <div class="confirm-dialog-actions">
-          <button class="row-action" type="button" on:click={closeConfirmDialog}>
-            <X size={13} />
+          <button use:focusWhenMounted class="row-action" type="button" on:click={closeConfirmDialog}>
             取消
           </button>
           <button class:danger={confirmDialog.danger} class="row-action" type="button" on:click={confirmDialogAction}>
-            {#if confirmDialog.danger}
-              <Trash2 size={13} />
-            {:else}
-              <CheckCircle2 size={13} />
-            {/if}
             {confirmDialog.confirmLabel}
           </button>
         </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if createGroupDialogOpen}
+    <div class="modal-backdrop" role="presentation" on:click={closeCreateGroupDialog}>
+      <div
+        class="group-create-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="创建群聊"
+        tabindex="-1"
+        on:click|stopPropagation
+        on:keydown={(event) => handleModalKeydown(event, closeCreateGroupDialog)}
+      >
+        <header>
+          <div>
+            <h2>创建群聊</h2>
+            <span>已选择 {createGroupPeers.length} 位联系人</span>
+          </div>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeCreateGroupDialog}>
+            <X size={15} />
+          </button>
+        </header>
+        <div class="group-create-content">
+          <label class="group-create-name">
+            <span>群聊名称</span>
+            <input
+              value={createGroupNameDraft}
+              maxlength="40"
+              aria-label="群聊名称"
+              placeholder="输入群聊名称"
+              on:input={(event) => (createGroupNameDraft = (event.currentTarget as HTMLInputElement).value)}
+            />
+            <small>{createGroupNameDraft.trim().length}/40</small>
+          </label>
+          <label class="group-create-search">
+            <Search size={14} />
+            <input
+              use:focusWhenMounted
+              type="search"
+              value={createGroupQuery}
+              aria-label="搜索群成员"
+              placeholder="搜索联系人"
+              on:input={(event) => (createGroupQuery = (event.currentTarget as HTMLInputElement).value)}
+            />
+          </label>
+          <section class="group-create-members" aria-label="选择群成员">
+            {#each filteredCreateGroupPeers as peer (peer.peer_id)}
+              <button
+                class:active={selectedPeerIds.includes(peer.peer_id)}
+                class="group-create-member-choice"
+                type="button"
+                aria-pressed={selectedPeerIds.includes(peer.peer_id)}
+                aria-label={`${selectedPeerIds.includes(peer.peer_id) ? "取消选择成员" : "选择成员"} ${displayPeerName(peer)}`}
+                on:click={() => togglePeer(peer.peer_id)}
+              >
+                <i aria-hidden="true">{displayPeerName(peer).slice(0, 1)}</i>
+                <span class="group-create-member-copy">
+                  <strong>{displayPeerName(peer)}</strong>
+                  <small>{peer.hostname}</small>
+                </span>
+                <span class="group-create-choice-check" aria-hidden="true">
+                  {#if selectedPeerIds.includes(peer.peer_id)}
+                    <CheckSquare size={16} />
+                  {:else}
+                    <Square size={16} />
+                  {/if}
+                </span>
+              </button>
+            {:else}
+              <p class="group-create-empty">没有匹配的联系人</p>
+            {/each}
+          </section>
+        </div>
+        <footer class="group-create-actions">
+          <button class="row-action" type="button" disabled={createGroupSubmitting} on:click={closeCreateGroupDialog}>取消</button>
+          <button
+            class="row-action primary"
+            type="button"
+            disabled={!createGroupNameDraft.trim() || createGroupPeers.length === 0 || createGroupSubmitting}
+            on:click={handleCreateGroup}
+          >
+            <Users size={13} />
+            {createGroupSubmitting ? "创建中" : "创建"}
+          </button>
+        </footer>
       </div>
     </div>
   {/if}
@@ -5125,15 +5595,10 @@
         aria-label="转发消息"
         tabindex="-1"
         on:click|stopPropagation
-        on:keydown={(event) => {
-          if (event.key === "Escape") closeForwardDialog();
-        }}
+        on:keydown={(event) => handleModalKeydown(event, closeForwardDialog)}
       >
         <header>
-          <div>
-            <span class="eyebrow">转发</span>
-            <h2>{forwardingTitle}</h2>
-          </div>
+          <h2>{forwardingTitle}</h2>
           <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeForwardDialog}>
             <X size={15} />
           </button>
@@ -5161,29 +5626,54 @@
             </div>
           {/if}
         </div>
-        <input
-          class="forward-search"
-          value={forwardQuery}
-          placeholder="搜索会话"
-          on:input={(event) => (forwardQuery = (event.currentTarget as HTMLInputElement).value)}
-        />
-        <div class="forward-target-list">
+        <label class="forward-search-field">
+          <Search size={14} />
+          <input
+            use:focusWhenMounted
+            class="forward-search"
+            value={forwardQuery}
+            placeholder="搜索会话"
+            aria-label="搜索转发目标"
+            on:input={(event) => (forwardQuery = (event.currentTarget as HTMLInputElement).value)}
+          />
+        </label>
+        <div class="forward-target-list" aria-label="转发目标会话">
           {#each forwardTargets as conversation (conversation.id)}
-            <button type="button" on:click={() => confirmForwardMessage(conversation.id)}>
-              <i aria-hidden="true">{conversationDisplayTitle(conversation, peers, contactMetadata).slice(0, 1)}</i>
+            {@const targetTitle = conversationDisplayTitle(conversation, peers, contactMetadata)}
+            <button
+              class:selected={forwardTargetConversationId === conversation.id}
+              type="button"
+              aria-pressed={forwardTargetConversationId === conversation.id}
+              aria-label={`选择转发目标 ${targetTitle}`}
+              on:click={() => (forwardTargetConversationId = conversation.id)}
+            >
+              <i aria-hidden="true">{targetTitle.slice(0, 1)}</i>
               <span>
-                <strong>{conversationDisplayTitle(conversation, peers, contactMetadata)}</strong>
-                <small>{conversation.id}</small>
+                <strong>{targetTitle}</strong>
+                <small>{conversation.id.startsWith("group:") ? "群聊" : "单聊"}{conversation.archived ? " · 已归档" : conversation.muted ? " · 免打扰" : ""}</small>
               </span>
-              <b>
-                <Send size={13} />
-                {conversation.archived ? "归档" : conversation.muted ? "免扰" : "发送"}
-              </b>
+              <span class:selected={forwardTargetConversationId === conversation.id} class="forward-target-check" aria-hidden="true">
+                {#if forwardTargetConversationId === conversation.id}
+                  <CheckCircle2 size={14} />
+                {/if}
+              </span>
             </button>
           {:else}
             <p class="empty-note">没有匹配的会话</p>
           {/each}
         </div>
+        <footer class="forward-dialog-actions">
+          <button class="row-action" type="button" on:click={closeForwardDialog}>取消</button>
+          <button
+            class="row-action primary"
+            type="button"
+            disabled={!forwardTargetConversationId}
+            on:click={() => confirmForwardMessage(forwardTargetConversationId)}
+          >
+            <Send size={13} />
+            确认转发
+          </button>
+        </footer>
       </div>
     </div>
   {/if}

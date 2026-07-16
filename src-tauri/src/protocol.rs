@@ -281,6 +281,8 @@ pub struct GroupInviteFrame {
     pub name: String,
     #[serde(default)]
     pub announcement: String,
+    #[serde(default)]
+    pub announcement_pinned: bool,
     pub sender_id: String,
     pub recipients: Vec<String>,
     pub member_peer_ids: Vec<String>,
@@ -290,16 +292,18 @@ pub struct GroupInviteFrame {
 
 impl GroupInviteFrame {
     pub fn signing_payload(&self) -> Vec<u8> {
-        serde_json::json!({
+        let mut payload = serde_json::json!({
             "conversation_id": self.conversation_id,
             "name": self.name,
             "announcement": self.announcement,
             "sender_id": self.sender_id,
             "recipients": self.recipients,
             "member_peer_ids": self.member_peer_ids,
-        })
-        .to_string()
-        .into_bytes()
+        });
+        if self.announcement_pinned {
+            payload["announcement_pinned"] = serde_json::Value::Bool(true);
+        }
+        payload.to_string().into_bytes()
     }
 }
 
@@ -723,6 +727,7 @@ mod tests {
             conversation_id: "group:alpha".to_string(),
             name: "Alpha Team".to_string(),
             announcement: "15:00 发布窗口，先同步回滚方案。".to_string(),
+            announcement_pinned: true,
             sender_id: "peer-a".to_string(),
             recipients: vec!["peer-b".to_string()],
             member_peer_ids: vec!["peer-a".to_string(), "peer-b".to_string()],

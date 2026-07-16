@@ -3,6 +3,9 @@ name = "iim"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
+authors = ["xuning"]
+description = "A reliable peer-to-peer instant messenger for local networks."
+homepage = "https://spurh.com"
 
 [lib]
 name = "iim"
@@ -46,3 +49,10 @@ tempfile = "3.13"
 default = ["sqlcipher", "quic"]
 quic = ["quinn", "rcgen", "tokio"]
 sqlcipher = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = 3
+panic = "abort"
+strip = true

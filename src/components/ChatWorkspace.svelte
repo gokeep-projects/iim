@@ -4,8 +4,6 @@
   import Archive from "lucide-svelte/icons/archive";
   import BellOff from "lucide-svelte/icons/bell-off";
   import BellRing from "lucide-svelte/icons/bell-ring";
-  import CalendarDays from "lucide-svelte/icons/calendar-days";
-  import CheckCheck from "lucide-svelte/icons/check-check";
   import CheckSquare from "lucide-svelte/icons/check-square";
   import ChevronDown from "lucide-svelte/icons/chevron-down";
   import ChevronUp from "lucide-svelte/icons/chevron-up";
@@ -32,6 +30,7 @@
   import Trash2 from "lucide-svelte/icons/trash-2";
   import UploadCloud from "lucide-svelte/icons/upload-cloud";
   import Users from "lucide-svelte/icons/users";
+  import UserAvatar from "./UserAvatar.svelte";
   import Volume2 from "lucide-svelte/icons/volume-2";
   import X from "lucide-svelte/icons/x";
   import type { ChatMessage, ConversationSummary, MessageAttachment, MessageQuote, PeerProfile, PendingFileDraft, TransferTask, TransferManifest } from "../api";
@@ -44,8 +43,6 @@
     meta: string;
     insertText: string;
   };
-  type ConversationSearchFocus = "query" | "date";
-
   export let title = "内网广播";
   export let conversation: ConversationSummary | null = null;
   export let activePeer: PeerProfile | null = null;
@@ -56,7 +53,6 @@
   export let notice = "";
   export let typingText = "";
   export let replyQuote: MessageQuote | null = null;
-  export let quickReplies: string[] = [];
   export let isGroup = false;
   export let memberCount = 0;
   export let messageSenderLabels: Record<string, string> = {};
@@ -69,10 +65,9 @@
   export let pendingFileDrafts: PendingFileDraft[] = [];
   export let transferTasks: TransferTask[] = [];
   export let conversationSearchOpen = false;
+  export let inspectorOpen = false;
   export let nudgePulseKey = 0;
-  export let conversationSearchFocus: ConversationSearchFocus = "query";
   export let conversationSearchQuery = "";
-  export let conversationSearchDate = "";
   export let conversationSearchResults: ChatMessage[] = [];
   export let pinnedMessages: ChatMessage[] = [];
   export let todoMessages: ChatMessage[] = [];
@@ -91,22 +86,18 @@
   export let onSendPendingFiles: () => void | Promise<void> = () => {};
   export let onStartScreenshot: () => void | Promise<void> = () => {};
   export let onShowDetails: () => void = () => {};
+  export let onOpenPeerDetails: (peer: PeerProfile) => void = () => {};
   export let onShowTransfers: () => void = () => {};
   export let onSendNudge: () => void | Promise<void> = () => {};
   export let onOpenTransfer: (transferId: string) => void | Promise<void> = () => {};
   export let onCopyAttachmentFiles: (fileList: string) => void | Promise<void> = () => {};
   export let onRetryMessage: (message: ChatMessage) => void | Promise<void> = () => {};
-  export let onMarkConversationRead: () => void | Promise<void> = () => {};
-  export let onMarkConversationUnread: () => void | Promise<void> = () => {};
   export let onTogglePin: () => void | Promise<void> = () => {};
   export let onToggleMute: () => void | Promise<void> = () => {};
   export let onToggleArchive: () => void | Promise<void> = () => {};
   export let onToggleConversationSearch: () => void = () => {};
-  export let onOpenConversationDateJump: () => void = () => {};
   export let onConversationSearchQueryChange: (value: string) => void = () => {};
-  export let onConversationSearchDateChange: (value: string) => void = () => {};
   export let onRunConversationSearch: () => void | Promise<void> = () => {};
-  export let onRunConversationDateJump: () => void | Promise<void> = () => {};
   export let onFocusConversationSearchResult: (message: ChatMessage) => void = () => {};
   export let onClearConversationSearch: () => void = () => {};
   export let onLoadOlderMessages: () => void | Promise<void> = () => {};
@@ -127,14 +118,16 @@
 
   let dragging = false;
   let expressionMenuOpen = false;
+  let expressionTab: "emoji" | "gif" = "emoji";
   let moreToolsOpen = false;
   let nudgeAnimating = false;
   let lastNudgePulseKey = 0;
   let nudgeAnimationTimer: number | null = null;
   let textareaElement: HTMLTextAreaElement | null = null;
+  let gifFileInput: HTMLInputElement | null = null;
+  let lastFocusedConversationId = "";
   let messageListElement: HTMLDivElement | null = null;
   let conversationSearchInputElement: HTMLInputElement | null = null;
-  let conversationSearchDateElement: HTMLInputElement | null = null;
   let composerMenuElement: HTMLDivElement | null = null;
   let composerMenu: { x: number; y: number } | null = null;
   let mentionRange: { start: number; end: number } | null = null;
@@ -149,7 +142,12 @@
       }
     | null = null;
 
-  const emojiChoices = ["😀", "😂", "👍", "🙏", "🎉", "✅", "🔥", "❤️", "👌", "😅"];
+  const emojiGroups = [
+    { label: "常用", choices: ["😀", "😃", "😄", "😁", "😆", "😂", "🤣", "😊", "🙂", "🙃", "😉", "😍", "🥰", "😘", "😋", "😎"] },
+    { label: "情绪", choices: ["😐", "😅", "😢", "😭", "😤", "😠", "😡", "😱", "😳", "😞", "😴", "🤔", "😶", "😇", "🤗", "😵"] },
+    { label: "手势", choices: ["👍", "👎", "👌", "✌️", "🤞", "🤝", "👏", "🙌", "🙏", "💪", "👀", "👋", "✋", "👊", "☝️", "✅"] },
+    { label: "符号", choices: ["❤️", "🧡", "💛", "💚", "💙", "💜", "💯", "🔥", "✨", "🎉", "🎊", "🎁", "📌", "⚠️", "❓", "❗"] }
+  ];
   const explicitLinkSource = String.raw`https?:\/\/[^\s<>"']+`;
   const bareHostSource = String.raw`(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?::\d{2,5})?|[a-z][a-z0-9-]{1,62}:\d{2,5})(?:\/[^\s<>"']*)?`;
   const bodyTokenPattern = new RegExp(
@@ -170,13 +168,23 @@
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
-    if (sendDisabledReason) return;
+    if (sendDisabledReason || (pendingFileDrafts.length > 0 && fileActionsDisabled)) return;
     void onSend();
   }
 
   function showDetails() {
     if (conversationActionsDisabled) return;
     onShowDetails();
+  }
+
+  function peerForMessageSender(senderId: string) {
+    if (senderId === selfPeerId) return null;
+    return mentionableMembers.find((peer) => peer.peer_id === senderId) ?? activePeer;
+  }
+
+  function openMessageSenderDetails(peer: PeerProfile | null) {
+    if (!peer) return;
+    onOpenPeerDetails(peer);
   }
 
   function togglePin() {
@@ -199,11 +207,6 @@
     onToggleConversationSearch();
   }
 
-  function openConversationDateJump() {
-    if (conversationActionsDisabled) return;
-    onOpenConversationDateJump();
-  }
-
   function startMessageSelection() {
     if (conversationActionsDisabled) return;
     onStartMessageSelection();
@@ -212,15 +215,6 @@
   function sendNudge() {
     if (sendDisabledReason) return;
     void onSendNudge();
-  }
-
-  function markConversationReadState() {
-    if (conversationActionsDisabled) return;
-    if (conversation?.unread_count && conversation.unread_count > 0) {
-      void onMarkConversationRead();
-    } else {
-      void onMarkConversationUnread();
-    }
   }
 
   function triggerNudgeAnimation() {
@@ -293,6 +287,18 @@
     onDraftChange(`${draft}${emoji}`);
     expressionMenuOpen = false;
     closeMentionPanel();
+  }
+
+  function chooseGif() {
+    gifFileInput?.click();
+  }
+
+  function endpointIp(endpoint: string) {
+    const value = endpoint.trim();
+    if (!value) return "";
+    if (value.startsWith("[")) return value.slice(1, value.indexOf("]") > 0 ? value.indexOf("]") : undefined);
+    const colonCount = (value.match(/:/g) ?? []).length;
+    return colonCount === 1 ? value.slice(0, value.lastIndexOf(":")) : value;
   }
 
   function chooseDesktopFiles() {
@@ -456,11 +462,7 @@
 
   function focusConversationSearchInput() {
     void tick().then(() => {
-      if (conversationSearchFocus === "date") {
-        conversationSearchDateElement?.focus();
-      } else {
-        conversationSearchInputElement?.focus();
-      }
+      conversationSearchInputElement?.focus();
     });
   }
 
@@ -476,6 +478,15 @@
     return new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit" }).format(new Date(value));
   }
 
+  function formatMessageHoverTime(value: number) {
+    return new Intl.DateTimeFormat("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit"
+    }).format(new Date(value));
+  }
+
   function conversationPreviewText() {
     const draftPreview = conversation?.draft_preview?.trim();
     if (draftPreview) return `草稿：${draftPreview}`;
@@ -487,7 +498,7 @@
 
   function conversationMetaText() {
     if (isGroup) return `${memberCount} 位成员 · 本机 fanout`;
-    return activePeer?.endpoints[0] ?? activePeer?.hostname ?? "等待局域网发现";
+    return endpointIp(activePeer?.endpoints[0] ?? "") || activePeer?.hostname || "等待局域网发现";
   }
 
   function conversationTimeText() {
@@ -506,34 +517,51 @@
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
-    if (dayKey(value) === dayKey(today.getTime())) return "今天";
-    if (dayKey(value) === dayKey(yesterday.getTime())) return "昨天";
-    const weekday = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()];
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${weekday}`;
+    const time = formatTime(value);
+    if (dayKey(value) === dayKey(today.getTime())) return time;
+    if (dayKey(value) === dayKey(yesterday.getTime())) return `昨天 ${time}`;
+    return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
   }
 
-  function shouldShowDateDivider(message: ChatMessage, index: number) {
+  function shouldShowTimeDivider(message: ChatMessage, index: number) {
     if (index === 0) return true;
     const previous = messages[index - 1];
-    return !previous || dayKey(previous.created_at) !== dayKey(message.created_at);
+    if (!previous) return true;
+    return dayKey(previous.created_at) !== dayKey(message.created_at) || message.created_at - previous.created_at >= 5 * 60 * 1000;
   }
 
-  function statusLabel(status: ChatMessage["status"]) {
+  function messageStatusLabel(message: ChatMessage) {
+    if (message.status === "queued") return "等待发送";
+    if (message.status === "sending") {
+      const attempts = Math.min(3, Math.max(1, message.send_attempts ?? 1));
+      return `发送中 · 第 ${attempts}/3 次`;
+    }
+    if (message.status === "failed") return "发送失败";
     return {
-      queued: "排队",
-      sending: "发送中",
       delivered: "已送达",
       read: "已读",
-      failed: "失败",
       received: "已接收"
-    }[status];
+    }[message.status];
   }
 
-  function attemptLabel(message: ChatMessage) {
-    if (message.sender_id !== selfPeerId || !["queued", "sending", "failed"].includes(message.status)) return "";
-    const attempts = Math.max(0, message.send_attempts ?? 0);
-    if (attempts === 0) return "等待首次发送";
-    return `已尝试 ${attempts} 次`;
+  function messageStatusTone(status: ChatMessage["status"]) {
+    if (status === "failed") return "failed";
+    if (status === "queued" || status === "sending") return "active";
+    return "done";
+  }
+
+  function shouldShowMessageStatus(status: ChatMessage["status"]) {
+    return status === "failed" || status === "queued" || status === "sending";
+  }
+
+  function hasVisibleMessageMeta(message: ChatMessage) {
+    return (
+      message.favorited ||
+      todoMessageIdSet.has(message.id) ||
+      pinnedMessageIdSet.has(message.id) ||
+      shouldShowMessageStatus(message.status) ||
+      canRetryMessage(message)
+    );
   }
 
   function senderLabel(senderId: string) {
@@ -604,29 +632,6 @@
     return /^https?:\/\//i.test(value) ? value : `http://${value}`;
   }
 
-  function firstLinkPreview(body: string) {
-    bodyTokenPattern.lastIndex = 0;
-    for (const match of body.matchAll(bodyTokenPattern)) {
-      if (!match[1]) continue;
-      if (!shouldUseLinkMatch(body, match.index ?? 0, match[0])) continue;
-      const { url } = splitTrailingUrlPunctuation(match[0]);
-      const href = normalizedLinkHref(url);
-      try {
-        const parsed = new URL(href);
-        const path = `${parsed.pathname}${parsed.search}`;
-        return {
-          href,
-          host: parsed.hostname.replace(/^www\./i, ""),
-          path: path && path !== "/" ? (path.length > 96 ? `${path.slice(0, 96)}...` : path) : "首页",
-          protocol: parsed.protocol.replace(":", "").toUpperCase()
-        };
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
   function messageBodySegments(body: string) {
     const segments: Array<{ text: string; kind: "text" | "mention" | "link"; selfMention: boolean; href?: string }> = [];
     bodyTokenPattern.lastIndex = 0;
@@ -662,11 +667,7 @@
   }
 
   function canRetryMessage(message: ChatMessage) {
-    return message.sender_id === selfPeerId && ["queued", "failed"].includes(message.status) && !message.recalled;
-  }
-
-  function retryActionLabel(message: ChatMessage) {
-    return message.status === "queued" ? "立即重试" : "重新发送";
+    return message.sender_id === selfPeerId && message.status === "failed" && !message.recalled;
   }
 
   function fileName(path: string) {
@@ -847,8 +848,9 @@
   }
 
   $: peerAvailabilityLabel = activePeer?.status === "online" ? "可联系" : "暂不可达";
+  $: activePeerIp = endpointIp(activePeer?.endpoints[0] ?? "");
   $: peerPresenceAriaLabel = `${title} ${peerAvailabilityLabel}`;
-  $: headerScopeLabel = isGroup ? "群聊 · 无服务器 fanout" : "直连会话 · 无中间服务器";
+  $: headerScopeLabel = isGroup ? "群聊" : "单聊";
   $: composerScopeLabel = isGroup ? `群聊 · ${memberCount} 位成员` : "直连会话";
   $: emptyConversationPreview = conversationPreviewText();
   $: emptyConversationMeta = conversationMetaText();
@@ -876,21 +878,18 @@
   $: if (mentionActiveIndex >= mentionCandidates.length) mentionActiveIndex = 0;
   $: if (mentionRange && mentionCandidates.length === 0) mentionActiveIndex = 0;
   $: conversationSearchSummary = conversationSearchResults.length === 0
-    ? conversationSearchQuery.trim() || conversationSearchDate
+    ? conversationSearchQuery.trim()
       ? "暂无匹配结果"
-      : "输入关键词或选择日期定位聊天记录"
+      : "输入关键词搜索当前会话"
     : `${conversationSearchResults.length} 条结果${focusedSearchResultIndex >= 0 ? `，当前第 ${focusedSearchResultIndex + 1} 条` : ""}`;
   $: groupAnnouncement = isGroup ? conversation?.group_announcement?.trim() ?? "" : "";
-  $: conversationHasUnread = Boolean(conversation && conversation.unread_count > 0);
-  $: conversationReadStateLabel = conversationHasUnread ? "标为已读" : "标为未读";
-  $: conversationReadStateTitle = conversationHasUnread
-    ? conversation?.manual_unread
-      ? "清除手动未读标记"
-      : "将当前会话标为已读"
-    : "稍后处理，标为未读";
+  $: groupAnnouncementPinned = isGroup && Boolean(conversation?.group_announcement_pinned);
   $: if (conversationSearchOpen) {
-    conversationSearchFocus;
     focusConversationSearchInput();
+  }
+  $: if (conversation?.id && conversation.id !== lastFocusedConversationId) {
+    lastFocusedConversationId = conversation.id;
+    void tick().then(() => textareaElement?.focus());
   }
   $: if (nudgePulseKey !== lastNudgePulseKey) {
     lastNudgePulseKey = nudgePulseKey;
@@ -910,44 +909,52 @@
 
 <section class:nudge-shake={nudgeAnimating} class="chat-workspace" aria-label="聊天工作区">
   <header class="chat-header" role="group" aria-label="会话标题栏">
+    {#if !isGroup && activePeer}
+      <button
+        class="chat-avatar-button"
+        type="button"
+        aria-label={`查看 ${senderLabel(activePeer.peer_id)} 资料`}
+        title="查看联系人资料"
+        on:click={() => openMessageSenderDetails(activePeer)}
+      >
+        <UserAvatar name={senderLabel(activePeer.peer_id)} seed={activePeer.peer_id} status={activePeer.status} size={38} />
+      </button>
+    {:else}
+      <span class="chat-group-avatar"><UserAvatar name={title} seed={conversation?.id ?? title} group size={38} /></span>
+    {/if}
     <div class="chat-header-copy">
-      <span class="eyebrow">{headerScopeLabel}</span>
       <h1>{title}</h1>
       <p>
         {#if isGroup}
-          {memberCount} 位成员 · 本机 fanout 直连
+          {memberCount} 位成员
         {:else}
           <span class="chat-peer-meta">
-            <span>{activePeer?.endpoints[0] ?? "等待局域网发现"}</span>
-            <span
-              aria-label={peerPresenceAriaLabel}
-              class:online={activePeer?.status === "online"}
-              class:offline={activePeer?.status !== "online"}
-              class="presence-dot"
-              title={peerAvailabilityLabel}
-            ></span>
+            <span>{peerAvailabilityLabel}</span>
           </span>
         {/if}
       </p>
     </div>
     <div class="chat-header-actions" aria-label="会话快捷入口">
+      {#if !isGroup && activePeerIp}
+        <span class="chat-header-ip" title="对方 IP 地址">{activePeerIp}</span>
+      {/if}
       <button
-        class:active={conversationHasUnread}
-        class="chat-read-state-button"
+        class:active={conversationSearchOpen}
+        class="icon-button chat-header-action"
         type="button"
-        title={conversationActionsDisabledReason || conversationReadStateTitle}
-        aria-label={conversationReadStateLabel}
+        title={conversationActionsDisabledReason || (conversationSearchOpen ? "关闭聊天记录搜索" : "搜索聊天记录")}
+        aria-label={conversationSearchOpen ? "关闭聊天记录搜索" : "搜索聊天记录"}
         disabled={conversationActionsDisabled}
-        on:click={markConversationReadState}
+        on:click={toggleConversationSearch}
       >
-        <CheckCheck size={15} />
-        <span>{conversationReadStateLabel}</span>
+        <Search size={17} />
       </button>
       <button
         class="icon-button chat-header-action"
         type="button"
-        title={conversationActionsDisabledReason || (isGroup ? "查看群成员" : "查看直聊资料")}
-        aria-label={isGroup ? "查看群成员" : "查看直聊资料"}
+        class:active={inspectorOpen}
+        title={conversationActionsDisabledReason || (inspectorOpen ? "收起详情" : isGroup ? "查看群资料" : "查看直聊资料")}
+        aria-label={inspectorOpen ? "收起详情" : isGroup ? "查看群资料" : "查看直聊资料"}
         disabled={conversationActionsDisabled}
         on:click={showDetails}
       >
@@ -960,7 +967,7 @@
     </div>
   </header>
 
-  {#if groupAnnouncement}
+  {#if groupAnnouncement && groupAnnouncementPinned}
     <section class="group-announcement-banner" aria-label="群公告">
       <Info size={16} />
       <div>
@@ -1020,7 +1027,7 @@
           <Search size={13} />
           查询
         </button>
-        <button type="button" disabled={!conversationSearchQuery && !conversationSearchDate && conversationSearchResults.length === 0} on:click={onClearConversationSearch}>
+        <button type="button" disabled={!conversationSearchQuery && conversationSearchResults.length === 0} on:click={onClearConversationSearch}>
           <X size={13} />
           清空查询
         </button>
@@ -1028,20 +1035,6 @@
           <X size={15} />
         </button>
       </form>
-      <div class="conversation-date-jump">
-        <CalendarDays size={15} />
-        <input
-          aria-label="按日期跳转聊天记录"
-          bind:this={conversationSearchDateElement}
-          type="date"
-          value={conversationSearchDate}
-          on:input={(event) => onConversationSearchDateChange((event.currentTarget as HTMLInputElement).value)}
-        />
-        <button type="button" disabled={!conversationSearchDate} on:click={onRunConversationDateJump}>
-          <CalendarDays size={13} />
-          跳转日期
-        </button>
-      </div>
       <div class="conversation-search-summary-row">
         <div class="conversation-search-summary" role="status">{conversationSearchSummary}</div>
         <div class="conversation-search-nav" role="group" aria-label="搜索结果导航">
@@ -1139,16 +1132,18 @@
       </button>
     {/if}
     {#each messages as message, index (message.id)}
-      {#if shouldShowDateDivider(message, index)}
+      {#if shouldShowTimeDivider(message, index)}
         {@const dividerLabel = formatDateDivider(message.created_at)}
         <div class="message-date-divider" role="separator" aria-label={`聊天日期 ${dividerLabel}`}>
           <span>{dividerLabel}</span>
         </div>
       {/if}
+      {@const messagePeer = peerForMessageSender(message.sender_id)}
       <div
         class:mine={message.sender_id === selfPeerId}
         class:selection-mode={messageSelectionMode}
         class:selected={selectedMessageIds.includes(message.id)}
+        class:system={message.recalled}
         class="message-row"
       >
         {#if messageSelectionMode}
@@ -1162,20 +1157,58 @@
             <span>{selectionPreview(message)}</span>
           </label>
         {/if}
-        {#if !messageSelectionMode}
-          <div class="message-avatar" aria-hidden="true">
-            {senderLabel(message.sender_id).trim().slice(0, 1).toUpperCase() || "?"}
+        {#if message.recalled}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <div
+            class="message-system-stack"
+            on:click={() => {
+              if (messageSelectionMode) onToggleMessageSelection(message.id);
+            }}
+            on:contextmenu={(event) => onMessageContext(message, event)}
+          >
+            <time class="message-hover-time message-floating-time" datetime={new Date(message.created_at).toISOString()}>
+              {formatMessageHoverTime(message.created_at)}
+            </time>
+            <div
+              class:focused={message.id === focusedMessageId}
+              class="message-system-notice recalled-system-notice"
+              data-message-id={message.id}
+              role="status"
+            >
+              {message.sender_id === selfPeerId ? "你撤回了一条消息" : "对方撤回了一条消息"}
+            </div>
           </div>
+        {:else}
+        {#if !messageSelectionMode}
+          {#if messagePeer}
+            <button
+              class="message-avatar-button"
+              type="button"
+              aria-label={`查看 ${senderLabel(message.sender_id)} 资料`}
+              title={`查看 ${senderLabel(message.sender_id)} 资料`}
+              on:click={() => openMessageSenderDetails(messagePeer)}
+            >
+              <UserAvatar name={senderLabel(message.sender_id)} seed={message.sender_id} size={36} />
+            </button>
+          {:else}
+            <div class="message-avatar-self" aria-hidden="true">
+              <UserAvatar name={selfDisplayName || "我"} seed={selfPeerId} size={36} />
+            </div>
+          {/if}
         {/if}
         <div class="message-stack">
-          {#if !message.recalled && shouldShowSenderLabel(message)}
+          <time class="message-hover-time message-floating-time" datetime={new Date(message.created_at).toISOString()}>
+            {formatMessageHoverTime(message.created_at)}
+          </time>
+          {#if shouldShowSenderLabel(message)}
             <header class="message-author">{senderLabel(message.sender_id)}</header>
           {/if}
         <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
         <article
           class:mine={message.sender_id === selfPeerId}
-          class:recalled={message.recalled}
           class:focused={message.id === focusedMessageId}
+          class:attachment-only={message.attachments.length > 0 && !message.body.trim() && !message.quote}
+          class:has-quote={Boolean(message.quote)}
           class="message-bubble"
           data-message-id={message.id}
           on:click={() => {
@@ -1183,14 +1216,10 @@
           }}
           on:contextmenu={(event) => onMessageContext(message, event)}
         >
-          {#if message.recalled}
-            <p class="recalled-copy">{message.sender_id === selfPeerId ? "你撤回了一条消息" : "对方撤回了一条消息"}</p>
-          {:else}
-            {@const linkPreview = firstLinkPreview(message.body)}
             {#if message.quote}
               <blockquote class="message-quote">
-                <strong>{senderLabel(message.quote.sender_id)}</strong>
-                <span>{message.quote.body_preview}</span>
+                <strong class="message-quote-author">{senderLabel(message.quote.sender_id)}</strong>
+                <span class="message-quote-preview">{message.quote.body_preview}</span>
               </blockquote>
             {/if}
             {#if message.body.trim()}
@@ -1214,22 +1243,6 @@
                 {/each}
               </p>
             {/if}
-            {#if linkPreview}
-              <a
-                class="link-preview-card"
-                href={linkPreview.href}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={`打开链接 ${linkPreview.href}`}
-                on:click|stopPropagation
-              >
-                <span class="link-preview-icon"><ExternalLink size={16} /></span>
-                <span class="link-preview-copy">
-                  <strong>{linkPreview.host}</strong>
-                  <small>{linkPreview.protocol} · {linkPreview.path}</small>
-                </span>
-              </a>
-            {/if}
             {#if message.attachments.length > 0}
               <div class="attachment-stack" aria-label="消息附件">
                 {#each message.attachments as attachment (attachment.manifest.transfer_id)}
@@ -1240,6 +1253,7 @@
                     {@const imageFile = imageFileForManifest(attachment.manifest)}
                     {@const transferTask = transferTaskFor(attachment.manifest.transfer_id)}
                     {@const attachmentProgress = transferProgress(transferTask, attachment.manifest.total_bytes)}
+                    {@const transferFinished = transferTask?.status === "delivered" || transferTask?.status === "completed"}
                     <article
                       class:image-attachment-card={Boolean(imageFile)}
                       class="attachment-card"
@@ -1255,7 +1269,7 @@
                           <img src={imageSrc(imageFile.path)} alt={attachmentTitle} loading="lazy" />
                         </button>
                       {:else}
-                        <UploadCloud size={18} />
+                        <FileText size={18} />
                       {/if}
                       <div class="attachment-copy">
                         <strong>{attachmentTitle}</strong>
@@ -1264,45 +1278,48 @@
                           {#if attachment.manifest.files.length > 1}
                             · {attachment.manifest.files.slice(0, 3).map((file) => fileName(file.path)).join("、")}
                           {/if}
+                          {#if transferFinished} · 已完成{/if}
                         </span>
-                        <div class="attachment-status-row">
-                          <span class={`attachment-status-badge ${transferStatusTone(transferTask)}`}>
-                            {transferStatusLabel(transferTask)}
-                          </span>
-                          <span>{transferProgressLabel(transferTask, attachment.manifest.total_bytes)}</span>
-                        </div>
-                        {#if transferTask?.errorMessage}
-                          <span class="attachment-error" title={transferTask.errorMessage}>{transferTask.errorMessage}</span>
+                        {#if !transferFinished}
+                          <div class="attachment-status-row">
+                            <span class={`attachment-status-badge ${transferStatusTone(transferTask)}`}>
+                              {transferStatusLabel(transferTask)}
+                            </span>
+                            <span>{transferProgressLabel(transferTask, attachment.manifest.total_bytes)}</span>
+                          </div>
+                          {#if transferTask?.errorMessage}
+                            <span class="attachment-error" title={transferTask.errorMessage}>{transferTask.errorMessage}</span>
+                          {/if}
+                          <div
+                            class="attachment-progress"
+                            role="progressbar"
+                            aria-label={`${attachmentTitle} 传输进度`}
+                            aria-valuemin="0"
+                            aria-valuemax="100"
+                            aria-valuenow={attachmentProgress}
+                          >
+                            <span style={`width: ${attachmentProgress}%`}></span>
+                          </div>
                         {/if}
-                        <div
-                          class="attachment-progress"
-                          role="progressbar"
-                          aria-label={`${attachmentTitle} 传输进度`}
-                          aria-valuemin="0"
-                          aria-valuemax="100"
-                          aria-valuenow={attachmentProgress}
-                        >
-                          <span style={`width: ${attachmentProgress}%`}></span>
-                        </div>
                     </div>
-                    <div class="attachment-actions">
+                    <div class="attachment-actions attachment-floating-actions">
                       {#if imageFile}
-                        <button class="attachment-action" type="button" on:click|stopPropagation={() => openImagePreview(attachment)}>
+                        <button class="attachment-action" type="button" aria-label="预览" title="预览" on:click|stopPropagation={() => openImagePreview(attachment)}>
                           <Image size={13} />
-                          预览
+                          <span class="visually-hidden">预览</span>
                         </button>
                       {/if}
-                      <button class="attachment-action" type="button" on:click|stopPropagation={() => copyAttachmentFiles(attachment)}>
+                      <button class="attachment-action" type="button" aria-label="复制清单" title="复制清单" on:click|stopPropagation={() => copyAttachmentFiles(attachment)}>
                         <Copy size={13} />
-                        复制清单
+                        <span class="visually-hidden">复制清单</span>
                       </button>
-                      <button class="attachment-action" type="button" on:click={() => onOpenTransfer(attachment.manifest.transfer_id)}>
+                      <button class="attachment-action" type="button" aria-label="打开" title="打开所在位置" on:click={() => onOpenTransfer(attachment.manifest.transfer_id)}>
                         <ExternalLink size={13} />
-                        打开
+                        <span class="visually-hidden">打开</span>
                       </button>
-                      <button class="attachment-action" type="button" on:click={onShowTransfers}>
+                      <button class="attachment-action" type="button" aria-label="传输" title="查看传输任务" on:click={onShowTransfers}>
                         <UploadCloud size={13} />
-                        传输
+                        <span class="visually-hidden">传输</span>
                       </button>
                     </div>
                     </article>
@@ -1310,34 +1327,43 @@
                 {/each}
               </div>
             {/if}
-            {@const reactions = reactionGroups(message)}
-            {#if reactions.length > 0}
-              <div class="reaction-strip" aria-label="消息回应">
-                {#each reactions as item (item.reaction)}
-                  <button
-                    class:active={item.active}
-                    class="reaction-chip"
-                    type="button"
-                    aria-label={`回应 ${item.reaction}，${item.count} 人`}
-                    title={`切换回应 ${item.reaction}`}
-                    on:click={() => onReactMessage(message, item.reaction)}
-                  >
-                    <span>{item.reaction}</span>
-                    <b>{item.count}</b>
-                  </button>
-                {/each}
-              </div>
+            {#if true}
+              {@const reactions = reactionGroups(message)}
+              {#if reactions.length > 0}
+                <div class="reaction-strip" aria-label="消息回应">
+                  {#each reactions as item (item.reaction)}
+                    <button
+                      class:active={item.active}
+                      class="reaction-chip"
+                      type="button"
+                      aria-label={`回应 ${item.reaction}，${item.count} 人`}
+                      title={`切换回应 ${item.reaction}`}
+                      on:click={() => onReactMessage(message, item.reaction)}
+                    >
+                      <span>{item.reaction}</span>
+                      <b>{item.count}</b>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             {/if}
-          {/if}
         </article>
-          {#if !message.recalled}
-            <footer class="message-meta">
-              <span>{formatTime(message.created_at)}</span>
-              {#if message.favorited}<span class="favorite-mark"><Star size={12} /> 收藏</span>{/if}
-              {#if todoMessageIdSet.has(message.id)}<span class="todo-mark"><CheckSquare size={12} /> 待办</span>{/if}
-              {#if pinnedMessageIdSet.has(message.id)}<span class="pinned-mark"><Pin size={12} /> 置顶</span>{/if}
-              <span>{statusLabel(message.status)}</span>
-              {#if attemptLabel(message)}<span class="attempt-mark">{attemptLabel(message)}</span>{/if}
+          {#if hasVisibleMessageMeta(message)}
+            <footer class="message-meta message-hover-actions message-floating-meta" aria-label="消息快捷操作">
+              {#if message.favorited}<span class="message-meta-chip favorite-mark" aria-label="已收藏" title="已收藏"><Star size={12} /><span class="visually-hidden">收藏</span></span>{/if}
+              {#if todoMessageIdSet.has(message.id)}<span class="message-meta-chip todo-mark" aria-label="已设为待办" title="已设为待办"><CheckSquare size={12} /><span class="visually-hidden">待办</span></span>{/if}
+              {#if pinnedMessageIdSet.has(message.id)}<span class="message-meta-chip pinned-mark" aria-label="已置顶" title="已置顶"><Pin size={12} /><span class="visually-hidden">置顶</span></span>{/if}
+              {#if shouldShowMessageStatus(message.status)}
+                {@const statusText = messageStatusLabel(message)}
+                <span class={`message-status-chip ${messageStatusTone(message.status)}`} aria-label={`消息状态 ${statusText}`}>
+                  {#if message.status === "failed"}
+                    <X size={11} />
+                  {:else}
+                    <RefreshCw size={11} />
+                  {/if}
+                  {statusText}
+                </span>
+              {/if}
               {#if canRetryMessage(message)}
                 <button
                   class:danger={message.status === "failed"}
@@ -1346,12 +1372,13 @@
                   on:click|stopPropagation={() => onRetryMessage(message)}
                 >
                   <RefreshCw size={12} />
-                  {retryActionLabel(message)}
+                  重新发送
                 </button>
               {/if}
             </footer>
           {/if}
         </div>
+        {/if}
       </div>
     {:else}
       {#if conversation}
@@ -1460,16 +1487,6 @@
               <Trash2 size={13} />
               清空
             </button>
-            <button
-              class="primary-mini"
-              type="button"
-              title={fileActionsDisabled ? fileActionsDisabledReason : "发送待发送文件"}
-              disabled={fileActionsDisabled}
-              on:click={sendPendingFiles}
-            >
-              <Send size={13} />
-              发送
-            </button>
           </div>
         </header>
         <div class="pending-file-list" role="list">
@@ -1500,7 +1517,7 @@
       </section>
     {/if}
 
-    <div class="composer-context-row" aria-label="发送状态">
+    <div class:visually-hidden={composerWarnings.length === 0} class="composer-context-row" aria-label="发送状态">
       <span class="composer-context-pill" class:group={isGroup}>
         <ShieldCheck size={13} />
         {#if !isGroup}
@@ -1525,8 +1542,9 @@
     <div class="composer-tools" role="toolbar" aria-label="消息工具栏">
       <div class="toolbar-group" role="group" aria-label="附件工具">
         <button
-          class="tool-button composer-tool-button"
+          class="tool-button composer-tool-button more-tool-tile"
           type="button"
+          aria-label="文件"
           title={fileActionsDisabled ? fileActionsDisabledReason : "发送文件"}
           disabled={fileActionsDisabled}
           on:click={chooseDesktopFiles}
@@ -1535,8 +1553,9 @@
           <span class="composer-tool-label">文件</span>
         </button>
         <button
-          class="tool-button composer-tool-button"
+          class="tool-button composer-tool-button more-tool-tile"
           type="button"
+          aria-label="截图"
           title={fileActionsDisabled ? fileActionsDisabledReason : "截图后粘贴发送"}
           disabled={fileActionsDisabled}
           on:click={startScreenshot}
@@ -1548,36 +1567,27 @@
 	          class:active={expressionMenuOpen}
 	          class="tool-button composer-tool-button"
 	          type="button"
-	          title="表情和快捷回复"
-	          on:mouseenter={() => {
-	            moreToolsOpen = false;
-	            expressionMenuOpen = true;
-	          }}
+	          aria-label="表情"
+	          title="表情和动图"
+	          aria-haspopup="menu"
+	          aria-expanded={expressionMenuOpen}
 	          on:click={(event) => {
 	            event.stopPropagation();
 	            moreToolsOpen = false;
 	            expressionMenuOpen = !expressionMenuOpen;
 	          }}
 	        >
-	          <Smile size={15} />
-	          <span class="composer-tool-label">表情/快捷</span>
-	        </button>
-        <button
-          class:active={conversationSearchOpen}
-          class="tool-button composer-tool-button"
-          type="button"
-          title={conversationActionsDisabledReason || "查询聊天记录"}
-          disabled={conversationActionsDisabled}
-          on:click={toggleConversationSearch}
-        >
-          <Search size={15} />
-          <span class="composer-tool-label">聊天记录</span>
+          <Smile size={15} />
+          <span class="composer-tool-label">表情</span>
         </button>
         <button
           class:active={moreToolsOpen}
           class="tool-button composer-tool-button"
           type="button"
+          aria-label="更多"
           title="更多工具"
+          aria-haspopup="true"
+          aria-expanded={moreToolsOpen}
 	          on:click={(event) => {
 	            event.stopPropagation();
 	            expressionMenuOpen = false;
@@ -1591,7 +1601,7 @@
       {#if moreToolsOpen}
       <div class="toolbar-group toolbar-more-popover" role="group" aria-label="更多消息工具">
         <button
-          class="tool-button composer-tool-button"
+          class="tool-button composer-tool-button more-tool-tile"
           type="button"
           title={fileActionsDisabled ? fileActionsDisabledReason : "发送文件夹"}
           disabled={fileActionsDisabled}
@@ -1611,18 +1621,8 @@
           <span class="composer-tool-label">抖一抖</span>
         </button>
         <button
-          class="tool-button composer-tool-button"
-          type="button"
-          title={conversationActionsDisabledReason || "按日期跳转聊天记录"}
-          disabled={conversationActionsDisabled}
-          on:click={openConversationDateJump}
-        >
-          <CalendarDays size={15} />
-          <span class="composer-tool-label">日期</span>
-        </button>
-        <button
           class:active={messageSelectionMode}
-          class="tool-button composer-tool-button"
+          class="tool-button composer-tool-button more-tool-tile"
           type="button"
           title={conversationActionsDisabledReason || "多选消息"}
           disabled={conversationActionsDisabled}
@@ -1631,110 +1631,57 @@
           <CheckSquare size={15} />
           <span class="composer-tool-label">多选</span>
         </button>
-        <button class="tool-button composer-tool-button" type="button" title="传输列表" on:click={onShowTransfers}>
-          <FileText size={15} />
-          <span class="composer-tool-label">传输</span>
-        </button>
-        {#if conversation}
-          <button
-            class:active={conversation.pinned}
-            class="tool-button composer-tool-button"
-            type="button"
-            title={conversationActionsDisabledReason || (conversation.pinned ? "取消置顶" : "置顶会话")}
-            disabled={conversationActionsDisabled}
-            on:click={togglePin}
-          >
-            {#if conversation.pinned}<PinOff size={15} /><span class="composer-tool-label">取消置顶</span>{:else}<Pin size={15} /><span class="composer-tool-label">置顶</span>{/if}
-          </button>
-          <button
-            class:active={conversation.muted}
-            class="tool-button composer-tool-button"
-            type="button"
-            title={conversationActionsDisabledReason || (conversation.muted ? "取消免打扰" : "免打扰")}
-            disabled={conversationActionsDisabled}
-            on:click={toggleMute}
-          >
-            {#if conversation.muted}<Volume2 size={15} /><span class="composer-tool-label">取消免扰</span>{:else}<BellOff size={15} /><span class="composer-tool-label">免打扰</span>{/if}
-          </button>
-          <button
-            class:active={conversation.archived}
-            class="tool-button composer-tool-button"
-            type="button"
-            title={conversationActionsDisabledReason || (conversation.archived ? "取消归档" : "归档会话")}
-            disabled={conversationActionsDisabled}
-            on:click={toggleArchive}
-          >
-            <Archive size={15} />
-            <span class="composer-tool-label">{conversation.archived ? "取消归档" : "归档"}</span>
-          </button>
-        {/if}
-        <button
-          class="tool-button composer-tool-button"
-          type="button"
-          title={conversationActionsDisabledReason || (isGroup ? "群成员与会话详情" : "会话详情")}
-          disabled={conversationActionsDisabled}
-          on:click={showDetails}
-        >
-          {#if isGroup}
-            <Users size={15} />
-            <span class="composer-tool-label">成员</span>
-          {:else}
-            <Info size={15} />
-            <span class="composer-tool-label">详情</span>
-          {/if}
-        </button>
       </div>
       {/if}
-      <span class="composer-drop-hint">
-        <Paperclip size={14} />
-        拖拽或粘贴文件/图片到输入区
-      </span>
     </div>
 
 	    {#if expressionMenuOpen}
 	      <div
 	        class="expression-menu"
 	        role="menu"
-	        aria-label="表情和快捷回复"
+	        aria-label="表情和动图"
 	        tabindex="-1"
-	        on:mouseenter={() => (expressionMenuOpen = true)}
 	        on:click|stopPropagation
 	        on:keydown={(event) => {
 	          if (event.key === "Escape") expressionMenuOpen = false;
 	        }}
 	      >
-	        <section class="expression-menu-section" aria-label="表情选择器">
-	          <header>
-	            <Smile size={13} />
-	            <span>表情</span>
-	          </header>
-	          <div class="emoji-panel">
-	            {#each emojiChoices as emoji}
-	              <button type="button" role="menuitem" title={`插入 ${emoji}`} on:click={() => appendEmoji(emoji)}>{emoji}</button>
+	        <div class="expression-tabs" role="tablist" aria-label="表情类型">
+	          <button class:active={expressionTab === "emoji"} type="button" role="tab" aria-selected={expressionTab === "emoji"} on:click={() => (expressionTab = "emoji")}>表情</button>
+	          <button class:active={expressionTab === "gif"} type="button" role="tab" aria-selected={expressionTab === "gif"} on:click={() => (expressionTab = "gif")}>动图</button>
+	        </div>
+	        {#if expressionTab === "emoji"}
+	          <div class="emoji-scroll-panel">
+	            {#each emojiGroups as group (group.label)}
+	              <section class="expression-menu-section" aria-label={`${group.label}表情`}>
+	                <header><span>{group.label}</span></header>
+	                <div class="emoji-panel">
+	                  {#each group.choices as emoji}
+	                    <button type="button" role="menuitem" title={`插入 ${emoji}`} on:click={() => appendEmoji(emoji)}>{emoji}</button>
+	                  {/each}
+	                </div>
+	              </section>
 	            {/each}
 	          </div>
-	        </section>
-	        {#if quickReplies.length > 0}
-	          <section class="expression-menu-section" aria-label="快捷回复">
-	            <header>
-	              <Send size={13} />
-	              <span>快捷回复</span>
-	            </header>
-	            <div class="quick-reply-menu">
-	              {#each quickReplies as reply}
-	                <button
-	                  class="quick-reply-option"
-	                  type="button"
-	                  role="menuitem"
-	                  title={sendDisabledReason || reply}
-	                  disabled={Boolean(sendDisabledReason)}
-	                  on:click={() => sendQuickReply(reply)}
-	                >
-	                  <Send size={12} />
-	                  {reply}
-	                </button>
-	              {/each}
-	            </div>
+	        {:else}
+	          <section class="gif-picker-panel" aria-label="动图选择器">
+	            <button type="button" role="menuitem" on:click={chooseGif}>
+	              <Image size={22} />
+	              <span>选择 GIF 动图</span>
+	            </button>
+	            <input
+	              bind:this={gifFileInput}
+	              class="visually-hidden"
+	              type="file"
+	              accept="image/gif,.gif"
+	              aria-label="选择 GIF 动图文件"
+	              on:change={(event) => {
+	                const input = event.currentTarget as HTMLInputElement;
+	                void onPickFiles(input.files);
+	                input.value = "";
+	                expressionMenuOpen = false;
+	              }}
+	            />
 	          </section>
 	        {/if}
 	      </div>
@@ -1768,8 +1715,13 @@
         on:input={handleDraftInput}
         on:keydown={handleComposerKeydown}
       ></textarea>
-      <button class="send-button" type="submit" title={sendDisabledReason || "发送"} disabled={Boolean(sendDisabledReason)}>
-        <Send size={18} />
+      <button
+        class="send-button"
+        type="submit"
+        title={sendDisabledReason || (pendingFileDrafts.length > 0 ? fileActionsDisabledReason : "") || "发送"}
+        disabled={Boolean(sendDisabledReason || (pendingFileDrafts.length > 0 && fileActionsDisabled))}
+      >
+        发送
       </button>
     </div>
   </form>

@@ -49,6 +49,7 @@ pub struct AppPreferences {
     pub login_password_hash: String,
     pub profile_signature: String,
     pub avatar_label: String,
+    pub avatar_image: String,
     pub require_contact_for_messaging: bool,
 }
 
@@ -104,6 +105,7 @@ impl Default for AppPreferences {
             login_password_hash: String::new(),
             profile_signature: String::new(),
             avatar_label: String::new(),
+            avatar_image: String::new(),
             require_contact_for_messaging: false,
         }
     }
@@ -123,6 +125,10 @@ impl AppPreferences {
         self.login_password_hash = self.login_password_hash.trim().to_string();
         self.profile_signature = self.profile_signature.trim().chars().take(80).collect();
         self.avatar_label = self.avatar_label.trim().chars().take(2).collect();
+        self.avatar_image = self.avatar_image.trim().chars().take(600_000).collect();
+        if !self.avatar_image.is_empty() && !self.avatar_image.starts_with("data:image/") {
+            self.avatar_image.clear();
+        }
         self
     }
 }
@@ -130,6 +136,8 @@ impl AppPreferences {
 pub struct EncryptedStore {
     connection: Mutex<Connection>,
 }
+
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferCleanupResult {
@@ -727,7 +735,14 @@ impl EncryptedStore {
         member_peer_ids: &[String],
     ) -> anyhow::Result<String> {
         let conversation_id = format!("group:{}", Uuid::new_v4());
-        self.upsert_group_conversation(&conversation_id, name, "", owner_peer_id, member_peer_ids)?;
+        self.upsert_group_conversation(
+            &conversation_id,
+            name,
+            "",
+            false,
+            owner_peer_id,
+            member_peer_ids,
+        )?;
         Ok(conversation_id)
     }
 
@@ -736,6 +751,7 @@ impl EncryptedStore {
         conversation_id: &str,
         name: &str,
         announcement: &str,
+        announcement_pinned: bool,
         owner_peer_id: &str,
         member_peer_ids: &[String],
     ) -> anyhow::Result<()> {
@@ -766,18 +782,35 @@ impl EncryptedStore {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         transaction.execute(
-            "INSERT OR IGNORE INTO group_conversations (id, title, announcement, owner_peer_id, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![conversation_id, title, announcement, owner_peer_id, now, now],
+            "INSERT OR IGNORE INTO group_conversations
+                (id, title, announcement, announcement_pinned, owner_peer_id, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                conversation_id,
+                title,
+                announcement,
+                announcement_pinned as i64,
+                owner_peer_id,
+                now,
+                now
+            ],
         )?;
         transaction.execute(
             "UPDATE group_conversations
              SET title = ?1,
                  announcement = ?2,
-                 owner_peer_id = CASE WHEN owner_peer_id = '' THEN ?3 ELSE owner_peer_id END,
-                 updated_at = ?4
-             WHERE id = ?5",
-            params![title, announcement, owner_peer_id, now, conversation_id],
+                 announcement_pinned = ?3,
+                 owner_peer_id = CASE WHEN owner_peer_id = '' THEN ?4 ELSE owner_peer_id END,
+                 updated_at = ?5
+             WHERE id = ?6",
+            params![
+                title,
+                announcement,
+                announcement_pinned as i64,
+                owner_peer_id,
+                now,
+                conversation_id
+            ],
         )?;
         transaction.execute(
             "DELETE FROM group_members WHERE conversation_id = ?1",
@@ -823,7 +856,7 @@ impl EncryptedStore {
         let preferences = load_conversation_preferences(&connection)?;
 
         let mut group_statement = connection.prepare(
-            "SELECT id, title, announcement, owner_peer_id, updated_at FROM group_conversations
+            "SELECT id, title, announcement, announcement_pinned, owner_peer_id, updated_at FROM group_conversations
              ORDER BY updated_at DESC",
         )?;
         let group_rows = group_statement.query_map([], |row| {
@@ -831,8 +864,9 @@ impl EncryptedStore {
                 id: row.get(0)?,
                 title: row.get(1)?,
                 group_announcement: row.get(2)?,
-                group_owner_peer_id: row.get(3)?,
-                last_message_at: row.get(4)?,
+                group_announcement_pinned: row.get::<_, i64>(3)? != 0,
+                group_owner_peer_id: row.get(4)?,
+                last_message_at: row.get(5)?,
                 last_message_preview: String::new(),
                 unread_count: 0,
                 manual_unread: false,
@@ -912,6 +946,7 @@ impl EncryptedStore {
                 ),
                 id: conversation_id,
                 group_announcement: String::new(),
+                group_announcement_pinned: false,
                 group_owner_peer_id: String::new(),
                 last_message_at: row.get(1)?,
                 last_message_preview: message_preview(
@@ -958,6 +993,7 @@ impl EncryptedStore {
                     id: draft.conversation_id,
                     title: String::new(),
                     group_announcement: String::new(),
+                    group_announcement_pinned: false,
                     group_owner_peer_id: String::new(),
                     last_message_at: draft.updated_at,
                     last_message_preview: String::new(),
@@ -2130,24 +2166,27 @@ impl EncryptedStore {
                         Box::new(error),
                     )
                 })?;
-            hydrate_manifest_sources(&connection, &mut manifest).map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    2,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        error.to_string(),
-                    )),
-                )
-            })?;
             let status_normalized = status.to_lowercase();
-            let resumable = has_sources
+            let retryable_status = matches!(
+                status_normalized.as_str(),
+                "failed" | "cancelled" | "canceled"
+            );
+            if retryable_status && has_sources && has_authorizations {
+                hydrate_manifest_sources(&connection, &mut manifest).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            error.to_string(),
+                        )),
+                    )
+                })?;
+            }
+            let resumable = retryable_status
+                && has_sources
                 && has_authorizations
-                && transfer_manifest_sources_available(&manifest)
-                && matches!(
-                    status_normalized.as_str(),
-                    "failed" | "cancelled" | "canceled"
-                );
+                && transfer_manifest_sources_available(&manifest);
             Ok(TransferTask::from_manifest(
                 id,
                 conversation_id,
@@ -2159,6 +2198,13 @@ impl EncryptedStore {
             ))
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn transfer_count(&self) -> anyhow::Result<usize> {
+        let connection = self.connection()?;
+        let count: i64 =
+            connection.query_row("SELECT COUNT(*) FROM transfers", [], |row| row.get(0))?;
+        Ok(count.max(0) as usize)
     }
 
     pub fn delete_transfer(&self, transfer_id: &str) -> anyhow::Result<bool> {
@@ -2270,6 +2316,11 @@ impl EncryptedStore {
 
     fn migrate(&self) -> anyhow::Result<()> {
         let connection = self.connection()?;
+        let schema_version: i64 =
+            connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if schema_version >= CURRENT_SCHEMA_VERSION {
+            return Ok(());
+        }
         connection.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS messages (
@@ -2290,6 +2341,10 @@ impl EncryptedStore {
             );
             CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
                 ON messages(conversation_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation_latest
+                ON messages(conversation_id, created_at DESC, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_messages_status_created
+                ON messages(status, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_messages_body
                 ON messages(body);
             CREATE TABLE IF NOT EXISTS trusted_peers (
@@ -2316,6 +2371,8 @@ impl EncryptedStore {
                 sent_bytes INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_transfers_updated
+                ON transfers(updated_at DESC);
             CREATE TABLE IF NOT EXISTS local_transfer_sources (
                 transfer_id TEXT NOT NULL,
                 file_index INTEGER NOT NULL,
@@ -2339,6 +2396,7 @@ impl EncryptedStore {
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 announcement TEXT NOT NULL DEFAULT '',
+                announcement_pinned INTEGER NOT NULL DEFAULT 0,
                 owner_peer_id TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
@@ -2476,9 +2534,16 @@ impl EncryptedStore {
         ensure_column(
             &connection,
             "group_conversations",
+            "announcement_pinned",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        ensure_column(
+            &connection,
+            "group_conversations",
             "owner_peer_id",
             "TEXT NOT NULL DEFAULT ''",
         )?;
+        connection.pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION)?;
         Ok(())
     }
 }
@@ -2488,6 +2553,7 @@ pub struct ConversationSummary {
     pub id: String,
     pub title: String,
     pub group_announcement: String,
+    pub group_announcement_pinned: bool,
     pub group_owner_peer_id: String,
     pub last_message_at: i64,
     pub last_message_preview: String,
@@ -2955,7 +3021,7 @@ pub fn data_dir_config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppPreferences, AppShortcuts, EncryptedStore};
+    use super::{AppPreferences, AppShortcuts, EncryptedStore, CURRENT_SCHEMA_VERSION};
     use crate::protocol::{
         ChatBody, FileEntry, MessageAttachment, MessageStatus, TransferManifest,
     };
@@ -2971,6 +3037,17 @@ mod tests {
         };
 
         assert!(error.to_string().contains("database key cannot be empty"));
+    }
+
+    #[test]
+    fn encrypted_store_records_current_schema_version() {
+        let store = EncryptedStore::open_memory_with_key("schema-version-key").expect("store");
+        let connection = store.connection().expect("connection");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("schema version");
+
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 
     fn test_chat_body(message_id: &str, recipients: Vec<&str>) -> ChatBody {
@@ -3192,6 +3269,7 @@ mod tests {
                 "group:ops",
                 "值班群",
                 "今天 15:00 发布窗口，所有人提前同步回滚方案。",
+                true,
                 "local-peer",
                 &members,
             )
@@ -3207,6 +3285,7 @@ mod tests {
             "今天 15:00 发布窗口，所有人提前同步回滚方案。"
         );
         assert_eq!(summary.group_owner_peer_id, "local-peer");
+        assert!(summary.group_announcement_pinned);
     }
 
     #[test]
@@ -3578,6 +3657,7 @@ mod tests {
             login_password_hash: String::new(),
             profile_signature: String::new(),
             avatar_label: String::new(),
+            avatar_image: String::new(),
             require_contact_for_messaging: false,
         }
         .normalized();

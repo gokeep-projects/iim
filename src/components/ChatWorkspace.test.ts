@@ -177,7 +177,7 @@ describe("ChatWorkspace attachments", () => {
     expect(onReactMessage).toHaveBeenCalledWith(message, "👍");
   });
 
-  it("keeps group detail actions in the composer toolbar, not the announcement banner", async () => {
+  it("keeps group details in the title bar, not the announcement or composer tools", async () => {
     const showDetails = vi.fn();
     render(ChatWorkspace, {
       props: {
@@ -188,6 +188,7 @@ describe("ChatWorkspace attachments", () => {
           id: "group:ops",
           title: "内网群聊",
           group_announcement: "今天 15:00 发布窗口，先同步回滚方案。",
+          group_announcement_pinned: true,
         }),
         onShowDetails: showDetails,
       },
@@ -202,11 +203,33 @@ describe("ChatWorkspace attachments", () => {
       within(banner).queryByRole("button", { name: "查看群资料" }),
     ).not.toBeInTheDocument();
 
-    await fireEvent.click(within(await openMoreTools()).getByRole("button", { name: "成员" }));
+    await fireEvent.click(
+      within(screen.getByRole("group", { name: "会话标题栏" })).getByRole("button", {
+        name: "查看群资料",
+      }),
+    );
     expect(showDetails).toHaveBeenCalledTimes(1);
+    expect(within(await openMoreTools()).queryByRole("button", { name: "成员" })).not.toBeInTheDocument();
   });
 
-  it("labels group conversations as no-server fanout groups in the header", () => {
+  it("keeps an unpinned group announcement out of the chat timeline", () => {
+    render(ChatWorkspace, {
+      props: {
+        isGroup: true,
+        title: "内网群聊",
+        conversation: conversation({
+          id: "group:ops",
+          title: "内网群聊",
+          group_announcement: "仅在群资料中查看",
+          group_announcement_pinned: false,
+        }),
+      },
+    });
+
+    expect(screen.queryByRole("region", { name: "群公告" })).not.toBeInTheDocument();
+  });
+
+  it("keeps protocol details out of the everyday group chat header", () => {
     render(ChatWorkspace, {
       props: {
         isGroup: true,
@@ -216,38 +239,43 @@ describe("ChatWorkspace attachments", () => {
     });
 
     const header = screen.getByRole("group", { name: "会话标题栏" });
-    expect(within(header).getByText("群聊 · 无服务器 fanout")).toBeInTheDocument();
-    expect(within(header).queryByText("直连会话 · 无中间服务器")).not.toBeInTheDocument();
-    expect(within(header).getByText("4 位成员 · 本机 fanout 直连")).toBeInTheDocument();
+    expect(within(header).getByRole("heading", { name: "内网群聊" })).toBeInTheDocument();
+    expect(within(header).getByText("4 位成员")).toBeInTheDocument();
+    expect(within(header).queryByText(/fanout|无服务器|无中间服务器|直连/)).not.toBeInTheDocument();
   });
 
-  it("adds date dividers when message history crosses days", () => {
+  it("keeps sparse day dividers and places per-message hover times above bubbles", () => {
     render(ChatWorkspace, {
       props: {
         messages: [
           textMessage({
             id: "day-one-a",
-            created_at: Date.UTC(2024, 0, 1, 12, 0),
+            created_at: new Date(2024, 0, 1, 12, 0).getTime(),
           }),
           textMessage({
             id: "day-one-b",
-            created_at: Date.UTC(2024, 0, 1, 13, 0),
+            created_at: new Date(2024, 0, 1, 12, 2).getTime(),
           }),
           textMessage({
             id: "day-two",
-            created_at: Date.UTC(2024, 0, 2, 9, 0),
+            created_at: new Date(2024, 0, 2, 9, 0).getTime(),
           }),
         ],
       },
     });
 
     expect(
-      screen.getByRole("separator", { name: /2024-01-01/ }),
+      screen.getByRole("separator", { name: /1月1日 12:00/ }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("separator", { name: /2024-01-02/ }),
+      screen.getByRole("separator", { name: /1月2日 09:00/ }),
     ).toBeInTheDocument();
     expect(screen.getAllByRole("separator")).toHaveLength(2);
+    const hoverTimes = document.querySelectorAll(".message-hover-time");
+    const firstStack = document.querySelector(".message-stack");
+    expect(hoverTimes).toHaveLength(3);
+    expect(firstStack?.firstElementChild).toHaveClass("message-hover-time");
+    expect(firstStack?.firstElementChild).toHaveClass("message-floating-time");
   });
 
   it("scrolls to the newest message when messages change", async () => {
@@ -299,6 +327,49 @@ describe("ChatWorkspace attachments", () => {
     ).toHaveAttribute("aria-valuenow", "50");
   });
 
+  it("only shows visible message status chips for exceptional sending states", () => {
+    render(ChatWorkspace, {
+      props: {
+        selfPeerId: "local-demo",
+        messages: [
+          textMessage({
+            id: "msg-delivered",
+            sender_id: "local-demo",
+            status: "delivered",
+            favorited: true,
+          }),
+          textMessage({
+            id: "msg-failed",
+            sender_id: "local-demo",
+            status: "failed",
+            send_attempts: 2,
+          }),
+          textMessage({
+            id: "msg-sending",
+            sender_id: "local-demo",
+            status: "sending",
+            send_attempts: 1,
+          }),
+        ],
+      },
+    });
+
+    expect(screen.queryByLabelText("消息状态 已送达")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("消息状态 发送失败")).toHaveClass(
+      "message-status-chip",
+      "failed",
+    );
+    expect(screen.getByLabelText("消息状态 发送中 · 第 1/3 次")).toHaveClass(
+      "message-status-chip",
+      "active",
+    );
+    const favoriteMark = screen.getByLabelText("已收藏");
+    expect(favoriteMark).toHaveClass("message-meta-chip");
+    expect(within(favoriteMark).getByText("收藏")).toHaveClass("visually-hidden");
+    expect(favoriteMark.closest(".message-meta")).toHaveClass("message-hover-actions", "message-floating-meta");
+    expect(screen.queryByText("已尝试 2 次")).not.toBeInTheDocument();
+  });
+
   it("opens the transfer directory directly from an attachment card", async () => {
     const openTransfer = vi.fn();
     render(ChatWorkspace, {
@@ -330,9 +401,10 @@ describe("ChatWorkspace attachments", () => {
     const attachment = await screen.findByRole("article", {
       name: "附件 2 个文件",
     });
-    await fireEvent.click(
-      within(attachment).getByRole("button", { name: "复制清单" }),
-    );
+    const copyButton = within(attachment).getByRole("button", { name: "复制清单" });
+    expect(within(copyButton).getByText("复制清单")).toHaveClass("visually-hidden");
+    expect(copyButton.closest(".attachment-actions")).toHaveClass("attachment-floating-actions");
+    await fireEvent.click(copyButton);
 
     expect(copyAttachmentFiles).toHaveBeenCalledWith(
       "docs/readme.md\nassets/diagram.png",
@@ -407,6 +479,28 @@ describe("ChatWorkspace attachments", () => {
       await screen.findByRole("article", { name: "附件 report.pdf" }),
     ).toBeInTheDocument();
     expect(document.querySelector(".message-body")).not.toBeInTheDocument();
+    expect(document.querySelector(".message-bubble")).toHaveClass("attachment-only");
+  });
+
+  it("renders quoted messages as a compact author and preview line", () => {
+    render(ChatWorkspace, {
+      props: {
+        messages: [
+          textMessage({
+            quote: {
+              message_id: "quoted-message",
+              sender_id: "peer-b",
+              body_preview: "部署窗口 18:00",
+            },
+          }),
+        ],
+        messageSenderLabels: { "peer-b": "运维二号" },
+      },
+    });
+
+    const quote = document.querySelector(".message-quote");
+    expect(quote?.querySelector(".message-quote-author")).toHaveTextContent("运维二号");
+    expect(quote?.querySelector(".message-quote-preview")).toHaveTextContent("部署窗口 18:00");
   });
 
   it("keeps attachment actions inert when file actions are disabled", async () => {
@@ -515,12 +609,10 @@ describe("ChatWorkspace attachments", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noreferrer");
     expect(link).toHaveClass("message-link");
-    const preview = screen.getByRole("link", {
+    expect(screen.queryByRole("link", {
       name: "打开链接 https://example.com/runbook",
-    });
-    expect(preview).toHaveClass("link-preview-card");
-    expect(within(preview).getByText("example.com")).toBeInTheDocument();
-    expect(within(preview).getByText("HTTPS · /runbook")).toBeInTheDocument();
+    })).not.toBeInTheDocument();
+    expect(document.querySelector(".link-preview-card")).not.toBeInTheDocument();
     expect(screen.getByText("@Me")).toHaveClass("self-mention");
   });
 
@@ -540,11 +632,9 @@ describe("ChatWorkspace attachments", () => {
     expect(docsLink).toHaveAttribute("href", "http://intranet.local/wiki");
     expect(filesLink).toHaveAttribute("href", "http://nas-01:8080/share");
     expect(screen.getByText(".")).toBeInTheDocument();
-    const preview = screen.getByRole("link", {
+    expect(screen.queryByRole("link", {
       name: "打开链接 http://intranet.local/wiki",
-    });
-    expect(within(preview).getByText("intranet.local")).toBeInTheDocument();
-    expect(within(preview).getByText("HTTP · /wiki")).toBeInTheDocument();
+    })).not.toBeInTheDocument();
   });
 
   it("keeps balanced URL parentheses while stripping sentence punctuation", () => {
@@ -566,33 +656,39 @@ describe("ChatWorkspace attachments", () => {
       "https://kb.local/wiki/Project_(Alpha)",
     );
     expect(screen.getByText(".")).toBeInTheDocument();
-    const preview = screen.getByRole("link", {
+    expect(screen.queryByRole("link", {
       name: "打开链接 https://kb.local/wiki/Project_(Alpha)",
-    });
-    expect(within(preview).getByText("HTTPS · /wiki/Project_(Alpha)")).toBeInTheDocument();
+    })).not.toBeInTheDocument();
   });
 });
 
 describe("ChatWorkspace composer toolbar", () => {
-  it("keeps quick replies behind a compact menu instead of rendering every reply inline", async () => {
-    const send = vi.fn();
-    render(ChatWorkspace, {
-      props: {
-        quickReplies: ["收到", "稍后处理", "请发一下文件"],
-        onSend: send,
-      },
-    });
-
-    expect(screen.queryByRole("button", { name: "收到" })).not.toBeInTheDocument();
+  it("offers a broad emoji set and a dedicated GIF picker without quick replies", async () => {
+    render(ChatWorkspace);
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
-	    await fireEvent.click(within(toolbar).getByRole("button", { name: "表情/快捷" }));
-	
-	    const menu = await screen.findByRole("menu", { name: "表情和快捷回复" });
-	    expect(within(menu).getByLabelText("表情选择器")).toBeInTheDocument();
-	    expect(within(menu).getByLabelText("快捷回复")).toBeInTheDocument();
-	    await fireEvent.click(within(menu).getByRole("menuitem", { name: "收到" }));
+    await fireEvent.click(within(toolbar).getByRole("button", { name: "表情" }));
 
-    expect(send).toHaveBeenCalledWith("收到");
+    const menu = await screen.findByRole("menu", { name: "表情和动图" });
+    expect(within(menu).getAllByRole("menuitem").length).toBeGreaterThan(40);
+    expect(within(menu).queryByText("快捷回复")).not.toBeInTheDocument();
+    await fireEvent.click(within(menu).getByRole("tab", { name: "动图" }));
+    expect(within(menu).getByRole("menuitem", { name: "选择 GIF 动图" })).toBeInTheDocument();
+    expect(within(menu).getByLabelText("选择 GIF 动图文件")).toHaveAttribute("accept", "image/gif,.gif");
+  });
+
+  it("opens the expression picker only by deliberate click, not by hover", async () => {
+    render(ChatWorkspace);
+
+    const button = screen.getByRole("button", { name: "表情" });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+
+    await fireEvent.mouseEnter(button);
+    expect(screen.queryByRole("menu", { name: "表情和动图" })).not.toBeInTheDocument();
+    expect(button).toHaveAttribute("aria-expanded", "false");
+
+    await fireEvent.click(button);
+    expect(await screen.findByRole("menu", { name: "表情和动图" })).toBeInTheDocument();
+    expect(button).toHaveAttribute("aria-expanded", "true");
   });
 
   it("shows message selection controls with bulk actions above the chat history", async () => {
@@ -652,24 +748,58 @@ describe("ChatWorkspace composer toolbar", () => {
     expect(cancelSelection).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps conversation actions in the composer toolbar instead of the header", async () => {
+  it("keeps chat bubbles content-first with external metadata and compact selection rows", () => {
+    render(ChatWorkspace, {
+      props: {
+        messages: [
+          textMessage({ favorited: true }),
+          transferMessage(),
+        ],
+        messageSelectionMode: true,
+        selectedMessageIds: ["msg-text"],
+      },
+    });
+
+    const selectedRow = document.querySelector<HTMLElement>(".message-row.selected");
+    const attachment = document.querySelector<HTMLElement>(".attachment-card");
+    const firstBubble = document.querySelector<HTMLElement>(".message-bubble");
+
+    expect(selectedRow).toHaveClass("selection-mode");
+    expect(selectedRow?.querySelector(".message-select-control")).toBeInTheDocument();
+    expect(firstBubble?.querySelector(".message-meta")).not.toBeInTheDocument();
+    expect(document.querySelector(".message-meta")).toHaveClass("message-hover-actions");
+    expect(attachment).toBeInTheDocument();
+    expect(attachment?.querySelector(".attachment-progress")).toBeInTheDocument();
+  });
+
+  it("renders recalled messages as centered system notices instead of chat bubbles", () => {
+    const openMenu = vi.fn();
+    render(ChatWorkspace, {
+      props: {
+        messages: [textMessage({ recalled: true })],
+        onMessageContext: openMenu,
+      },
+    });
+
+    const notice = document.querySelector<HTMLElement>(".message-system-notice");
+    expect(notice).toBeInTheDocument();
+    expect(notice).toHaveTextContent("对方撤回了一条消息");
+    expect(document.querySelector(".message-row.system")).toBeInTheDocument();
+    expect(document.querySelector(".message-bubble")).not.toBeInTheDocument();
+  });
+
+  it("keeps search and details in the header while the composer stays message-focused", async () => {
     const toggleSearch = vi.fn();
     const showDetails = vi.fn();
-    const showTransfers = vi.fn();
     render(ChatWorkspace, {
       props: {
         onToggleConversationSearch: toggleSearch,
         onShowDetails: showDetails,
-        onShowTransfers: showTransfers,
       },
     });
 
     const header = screen.getByRole("group", { name: "会话标题栏" });
-    expect(
-      within(header).queryByRole("button", {
-        name: /文件|文件夹|截图|抖一抖|聊天记录|传输/,
-      }),
-    ).not.toBeInTheDocument();
+    await fireEvent.click(within(header).getByRole("button", { name: "搜索聊天记录" }));
     await fireEvent.click(within(header).getByRole("button", { name: "查看直聊资料" }));
 
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
@@ -678,17 +808,16 @@ describe("ChatWorkspace composer toolbar", () => {
     ).toBeInTheDocument();
     expect(within(toolbar).queryByRole("group", { name: "消息工具" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("group", { name: "会话工具" })).not.toBeInTheDocument();
-    await fireEvent.click(within(toolbar).getByRole("button", { name: "聊天记录" }));
+    expect(within(toolbar).queryByRole("button", { name: "聊天记录" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "传输" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 
     const moreTools = await openMoreTools();
-    await fireEvent.click(within(moreTools).getByRole("button", { name: "传输" }));
-    await fireEvent.click(within(moreTools).getByRole("button", { name: "详情" }));
+    expect(within(moreTools).queryByRole("button", { name: "传输" })).not.toBeInTheDocument();
+    expect(within(moreTools).queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
 
     expect(toggleSearch).toHaveBeenCalledTimes(1);
-    expect(showTransfers).toHaveBeenCalledTimes(1);
-    expect(showDetails).toHaveBeenCalledTimes(2);
+    expect(showDetails).toHaveBeenCalledTimes(1);
   });
 
   it("shows a direct chat details icon in the header without moving low-frequency tools there", async () => {
@@ -711,42 +840,22 @@ describe("ChatWorkspace composer toolbar", () => {
     expect(showDetails).toHaveBeenCalledTimes(1);
   });
 
-  it("toggles the current conversation read state from the header", async () => {
-    const markRead = vi.fn();
-    const markUnread = vi.fn();
-    const firstRender = render(ChatWorkspace, {
+  it("keeps read and unread actions out of the chat header", () => {
+    render(ChatWorkspace, {
       props: {
         conversation: conversation({
           unread_count: 2,
           manual_unread: true,
         }),
-        onMarkConversationRead: markRead,
-        onMarkConversationUnread: markUnread,
       },
     });
 
     const unreadHeader = screen.getByRole("group", { name: "会话标题栏" });
-    await fireEvent.click(within(unreadHeader).getByRole("button", { name: "标为已读" }));
-    expect(markRead).toHaveBeenCalledTimes(1);
-
-    firstRender.unmount();
-    render(ChatWorkspace, {
-      props: {
-        conversation: conversation({
-          unread_count: 0,
-          manual_unread: false,
-        }),
-        onMarkConversationRead: markRead,
-        onMarkConversationUnread: markUnread,
-      },
-    });
-    const readHeader = screen.getByRole("group", { name: "会话标题栏" });
-    await fireEvent.click(within(readHeader).getByRole("button", { name: "标为未读" }));
-
-    expect(markUnread).toHaveBeenCalledTimes(1);
+    expect(within(unreadHeader).queryByRole("button", { name: "标为已读" })).not.toBeInTheDocument();
+    expect(within(unreadHeader).queryByRole("button", { name: "标为未读" })).not.toBeInTheDocument();
   });
 
-  it("places file, screenshot, and detail actions directly above the message input", () => {
+  it("places the four primary message actions directly above the input", () => {
     render(ChatWorkspace);
 
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
@@ -759,9 +868,8 @@ describe("ChatWorkspace composer toolbar", () => {
     expect(
       within(toolbar).getByRole("button", { name: "截图" }),
     ).toBeInTheDocument();
-	    expect(within(toolbar).getByRole("button", { name: "表情/快捷" })).toBeInTheDocument();
-	    expect(within(toolbar).queryByRole("button", { name: "快捷回复" })).not.toBeInTheDocument();
-    expect(within(toolbar).getByRole("button", { name: "聊天记录" })).toBeInTheDocument();
+    expect(within(toolbar).getByRole("button", { name: "表情" })).toBeInTheDocument();
+    expect(within(toolbar).queryByRole("button", { name: "聊天记录" })).not.toBeInTheDocument();
     expect(within(toolbar).getByRole("button", { name: "更多" })).toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "抖一抖" })).not.toBeInTheDocument();
     expect(within(toolbar).queryByRole("button", { name: "搜索" })).not.toBeInTheDocument();
@@ -783,7 +891,7 @@ describe("ChatWorkspace composer toolbar", () => {
     const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
     const buttons = within(toolbar).getAllByRole("button");
 
-    expect(buttons.length).toBe(5);
+    expect(buttons.length).toBe(4);
     for (const button of buttons) {
       expect(button).toHaveClass("composer-tool-button");
       expect(button).toHaveAttribute("title");
@@ -800,7 +908,9 @@ describe("ChatWorkspace composer toolbar", () => {
       },
     });
 
-    const nudgeButton = within(await openMoreTools()).getByRole("button", { name: "抖一抖" });
+    const moreTools = await openMoreTools();
+    expect(within(moreTools).getAllByRole("button")).toHaveLength(3);
+    const nudgeButton = within(moreTools).getByRole("button", { name: "抖一抖" });
 
     expect(nudgeButton).toBeDisabled();
     await fireEvent.click(nudgeButton);
@@ -838,15 +948,15 @@ describe("ChatWorkspace composer toolbar", () => {
 	  it("closes the expression picker when clicking outside the composer", async () => {
 	    render(ChatWorkspace);
 	
-	    await fireEvent.click(screen.getByRole("button", { name: "表情/快捷" }));
+	    await fireEvent.click(screen.getByRole("button", { name: "表情" }));
 	    expect(
-	      screen.getByRole("menu", { name: "表情和快捷回复" }),
+	      screen.getByRole("menu", { name: "表情和动图" }),
 	    ).toBeInTheDocument();
 	
 	    await fireEvent.click(document.body);
 	
 	    expect(
-	      screen.queryByRole("menu", { name: "表情和快捷回复" }),
+	      screen.queryByRole("menu", { name: "表情和动图" }),
 	    ).not.toBeInTheDocument();
 	  });
 
@@ -870,108 +980,57 @@ describe("ChatWorkspace composer toolbar", () => {
     await waitFor(() => expect(menu).toHaveFocus());
   });
 
-  it("exposes pin and mute actions in the composer conversation tools", async () => {
-    const togglePin = vi.fn();
-    const toggleMute = vi.fn();
-    const toggleArchive = vi.fn();
-    render(ChatWorkspace, {
-      props: {
-        conversation: conversation({
-          pinned: true,
-          muted: false,
-          archived: true,
-        }),
-        onTogglePin: togglePin,
-        onToggleMute: toggleMute,
-        onToggleArchive: toggleArchive,
-      },
-    });
-
-    const conversationTools = await openMoreTools();
-    await fireEvent.click(
-      within(conversationTools).getByRole("button", { name: "取消置顶" }),
-    );
-    await fireEvent.click(
-      within(conversationTools).getByRole("button", { name: "免打扰" }),
-    );
-    await fireEvent.click(
-      within(conversationTools).getByRole("button", { name: "取消归档" }),
-    );
-
-    expect(togglePin).toHaveBeenCalledTimes(1);
-    expect(toggleMute).toHaveBeenCalledTimes(1);
-    expect(toggleArchive).toHaveBeenCalledTimes(1);
+  it("keeps low-frequency conversation management out of the more menu", async () => {
+    render(ChatWorkspace);
+    const tools = await openMoreTools();
+    expect(within(tools).queryByRole("button", { name: /置顶|免打扰|归档/ })).not.toBeInTheDocument();
+    expect(within(tools).getAllByRole("button")).toHaveLength(3);
   });
 
   it("disables conversation actions when no conversation can be targeted", async () => {
     const showDetails = vi.fn();
-    const togglePin = vi.fn();
-    const toggleMute = vi.fn();
-    const toggleArchive = vi.fn();
     render(ChatWorkspace, {
       props: {
         conversation: conversation(),
         conversationActionsDisabledReason: "请先选择一个会话或联系人",
         onShowDetails: showDetails,
-        onTogglePin: togglePin,
-        onToggleMute: toggleMute,
-        onToggleArchive: toggleArchive,
       },
     });
 
-    const conversationTools = await openMoreTools();
-    const detailButton = within(conversationTools).getByRole("button", { name: "详情" });
-    const pinButton = within(conversationTools).getByRole("button", { name: "置顶" });
-    const muteButton = within(conversationTools).getByRole("button", { name: "免打扰" });
-    const archiveButton = within(conversationTools).getByRole("button", { name: "归档" });
-
+    const header = screen.getByRole("group", { name: "会话标题栏" });
+    const detailButton = within(header).getByRole("button", { name: "查看直聊资料" });
+    const searchButton = within(header).getByRole("button", { name: "搜索聊天记录" });
     expect(detailButton).toBeDisabled();
+    expect(searchButton).toBeDisabled();
     expect(detailButton).toHaveAttribute("title", "请先选择一个会话或联系人");
-    expect(pinButton).toBeDisabled();
-    expect(muteButton).toBeDisabled();
-    expect(archiveButton).toBeDisabled();
-
-    await fireEvent.click(detailButton);
-    await fireEvent.click(pinButton);
-    await fireEvent.click(muteButton);
-    await fireEvent.click(archiveButton);
 
     expect(showDetails).not.toHaveBeenCalled();
-    expect(togglePin).not.toHaveBeenCalled();
-    expect(toggleMute).not.toHaveBeenCalled();
-    expect(toggleArchive).not.toHaveBeenCalled();
   });
 
   it("disables current-conversation message tools when no conversation can be targeted", async () => {
     const toggleSearch = vi.fn();
-    const openDateJump = vi.fn();
     const startSelection = vi.fn();
     render(ChatWorkspace, {
       props: {
         conversationActionsDisabledReason: "请先选择一个会话或联系人",
         onToggleConversationSearch: toggleSearch,
-        onOpenConversationDateJump: openDateJump,
         onStartMessageSelection: startSelection,
       },
     });
 
-    const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
-    const searchButton = within(toolbar).getByRole("button", { name: "聊天记录" });
+    const header = screen.getByRole("group", { name: "会话标题栏" });
+    const searchButton = within(header).getByRole("button", { name: "搜索聊天记录" });
     const messageTools = await openMoreTools();
-    const dateButton = within(messageTools).getByRole("button", { name: "日期" });
     const selectionButton = within(messageTools).getByRole("button", { name: "多选" });
 
     expect(searchButton).toBeDisabled();
     expect(searchButton).toHaveAttribute("title", "请先选择一个会话或联系人");
-    expect(dateButton).toBeDisabled();
     expect(selectionButton).toBeDisabled();
 
     await fireEvent.click(searchButton);
-    await fireEvent.click(dateButton);
     await fireEvent.click(selectionButton);
 
     expect(toggleSearch).not.toHaveBeenCalled();
-    expect(openDateJump).not.toHaveBeenCalled();
     expect(startSelection).not.toHaveBeenCalled();
   });
 });
@@ -1214,28 +1273,25 @@ describe("ChatWorkspace conversation search", () => {
     expect(await screen.findByPlaceholderText("查询聊天记录")).toHaveFocus();
   });
 
-  it("opens date jump from the composer toolbar", async () => {
-    const openDateJump = vi.fn();
-    render(ChatWorkspace, {
-      props: {
-        onOpenConversationDateJump: openDateJump,
-      },
-    });
+  it("opens conversation history from the dedicated title-bar icon", async () => {
+    const toggleSearch = vi.fn();
+    render(ChatWorkspace, { props: { onToggleConversationSearch: toggleSearch } });
 
-    await fireEvent.click(within(await openMoreTools()).getByRole("button", { name: "日期" }));
+    await fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
 
-    expect(openDateJump).toHaveBeenCalledTimes(1);
+    expect(toggleSearch).toHaveBeenCalledTimes(1);
+    expect(within(await openMoreTools()).queryByRole("button", { name: "日期" })).not.toBeInTheDocument();
   });
 
-  it("focuses the date jump input when opened in date mode", async () => {
+  it("keeps date filtering out of conversation search", async () => {
     render(ChatWorkspace, {
       props: {
         conversationSearchOpen: true,
-        conversationSearchFocus: "date",
       },
     });
 
-    expect(await screen.findByLabelText("按日期跳转聊天记录")).toHaveFocus();
+    expect(screen.queryByLabelText("按日期跳转聊天记录")).not.toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("查询聊天记录")).toHaveFocus();
   });
 
   it("shows result summary and clears conversation search state", async () => {
@@ -1320,7 +1376,7 @@ describe("ChatWorkspace failed messages", () => {
     );
   });
 
-  it("offers inline retry for queued outgoing messages", async () => {
+  it("keeps queued outgoing messages automatic until they fail", () => {
     const retryMessage = vi.fn();
     render(ChatWorkspace, {
       props: {
@@ -1330,29 +1386,29 @@ describe("ChatWorkspace failed messages", () => {
       },
     });
 
-    expect(screen.getByText("排队")).toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("button", { name: "立即重试" }));
-
-    expect(retryMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "msg-text", status: "queued" }),
-    );
+    expect(screen.getByLabelText("消息状态 等待发送")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "立即重试" })).not.toBeInTheDocument();
+    expect(retryMessage).not.toHaveBeenCalled();
   });
 
-  it("shows send attempt metadata for retryable outgoing messages", () => {
+  it("folds live retry attempts into one capped sending status", () => {
     render(ChatWorkspace, {
       props: {
         selfPeerId: "local-demo",
         messages: [
           textMessage({ id: "msg-failed-attempts", sender_id: "local-demo", status: "failed", send_attempts: 3 }),
           textMessage({ id: "msg-queued-first", sender_id: "local-demo", status: "queued", send_attempts: 0 }),
+          textMessage({ id: "msg-sending-capped", sender_id: "local-demo", status: "sending", send_attempts: 8 }),
           textMessage({ id: "msg-delivered", sender_id: "local-demo", status: "delivered", send_attempts: 4 }),
         ],
       },
     });
 
-    expect(screen.getByText("已尝试 3 次")).toHaveClass("attempt-mark");
-    expect(screen.getByText("等待首次发送")).toHaveClass("attempt-mark");
-    expect(screen.queryByText("已尝试 4 次")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("消息状态 发送失败")).toHaveTextContent("发送失败");
+    expect(screen.getByLabelText("消息状态 等待发送")).toHaveTextContent("等待发送");
+    expect(screen.getByLabelText("消息状态 发送中 · 第 3/3 次")).toHaveTextContent("发送中 · 第 3/3 次");
+    expect(screen.queryByText(/第 8\/3 次/)).not.toBeInTheDocument();
+    expect(document.querySelector(".attempt-mark")).not.toBeInTheDocument();
   });
 
   it("does not offer inline retry for failed incoming messages", () => {
@@ -1391,10 +1447,9 @@ describe("ChatWorkspace pending files", () => {
     expect(within(tray).getByText("1.0 KB")).toBeInTheDocument();
   });
 
-  it("renders pending files and exposes tray actions", async () => {
+  it("renders pending files and keeps one shared send command", async () => {
     const removePendingFile = vi.fn();
     const clearPendingFiles = vi.fn();
-    const sendPendingFiles = vi.fn();
     render(ChatWorkspace, {
       props: {
         pendingFileDrafts: [
@@ -1417,7 +1472,6 @@ describe("ChatWorkspace pending files", () => {
         ],
         onRemovePendingFile: removePendingFile,
         onClearPendingFiles: clearPendingFiles,
-        onSendPendingFiles: sendPendingFiles,
       },
     });
 
@@ -1428,15 +1482,14 @@ describe("ChatWorkspace pending files", () => {
 
     await fireEvent.click(within(tray).getByTitle("移除 report.pdf"));
     await fireEvent.click(within(tray).getByRole("button", { name: "清空" }));
-    await fireEvent.click(within(tray).getByRole("button", { name: "发送" }));
+    expect(within(tray).queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送" })).toBeEnabled();
 
     expect(removePendingFile).toHaveBeenCalledWith("draft-1");
     expect(clearPendingFiles).toHaveBeenCalledTimes(1);
-    expect(sendPendingFiles).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps pending file send inert when file actions are disabled", async () => {
-    const sendPendingFiles = vi.fn();
+  it("keeps the shared send command blocked when file actions are disabled", async () => {
     render(ChatWorkspace, {
       props: {
         fileActionsDisabled: true,
@@ -1451,16 +1504,11 @@ describe("ChatWorkspace pending files", () => {
             directory: false,
           },
         ],
-        onSendPendingFiles: sendPendingFiles,
       },
     });
 
-    const tray = screen.getByLabelText("待发送文件");
-    const sendButton = within(tray).getByRole("button", { name: "发送" });
+    const sendButton = screen.getByRole("button", { name: "发送" });
     expect(sendButton).toBeDisabled();
-    await fireEvent.click(sendButton);
-
-    expect(sendPendingFiles).not.toHaveBeenCalled();
   });
 });
 
@@ -1518,23 +1566,11 @@ describe("ChatWorkspace send shortcut", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("does not send quick replies when sending is disabled", async () => {
-    const send = vi.fn();
-    render(ChatWorkspace, {
-      props: {
-        quickReplies: ["收到"],
-        sendDisabledReason: "blocked",
-        onSend: send,
-      },
-    });
-
-    const toolbar = screen.getByRole("toolbar", { name: "消息工具栏" });
-	    await fireEvent.click(within(toolbar).getByRole("button", { name: "表情/快捷" }));
-	    const quickReply = within(await screen.findByRole("menu", { name: "表情和快捷回复" })).getByRole("menuitem", { name: "收到" });
-    expect(quickReply).toBeDisabled();
-    await fireEvent.click(quickReply);
-
-    expect(send).not.toHaveBeenCalled();
+  it("keeps expressions available while the disabled send button remains authoritative", async () => {
+    render(ChatWorkspace, { props: { sendDisabledReason: "blocked" } });
+    await fireEvent.click(screen.getByRole("button", { name: "表情" }));
+    expect(await screen.findByRole("menu", { name: "表情和动图" })).toBeInTheDocument();
+    expect(screen.getByTitle("blocked")).toBeDisabled();
   });
 });
 
@@ -1572,7 +1608,8 @@ describe("ChatWorkspace composer context", () => {
     const overview = screen.getByRole("region", { name: "会话概览" });
     expect(within(overview).getByText("产品经理")).toBeInTheDocument();
     expect(within(overview).getByText("可以先发一版无服务器群聊，我来验收。")).toBeInTheDocument();
-    expect(within(overview).getByText("192.168.1.42:24251")).toBeInTheDocument();
+    expect(within(overview).getByText("192.168.1.42")).toBeInTheDocument();
+    expect(within(overview).queryByText("192.168.1.42:24251")).not.toBeInTheDocument();
     expect(screen.queryByText("选择会话后开始内网直连聊天")).not.toBeInTheDocument();
   });
 
@@ -1643,6 +1680,43 @@ describe("ChatWorkspace composer context", () => {
 });
 
 describe("ChatWorkspace group messages", () => {
+  it("opens sender details from an incoming message avatar", async () => {
+    const openPeerDetails = vi.fn();
+    const sender = {
+      peer_id: "peer-a",
+      display_name: "研发一号",
+      hostname: "rd-01",
+      avatar_hash: null,
+      status: "online" as const,
+      endpoints: ["192.168.1.8:24251"],
+      fingerprint: "f".repeat(64),
+    };
+    render(ChatWorkspace, {
+      props: {
+        isGroup: true,
+        selfPeerId: "local-peer",
+        messages: [textMessage()],
+        messageSenderLabels: { "peer-a": "研发一号" },
+        mentionableMembers: [sender],
+        onOpenPeerDetails: openPeerDetails,
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: "查看 研发一号 资料" }));
+
+    expect(openPeerDetails).toHaveBeenCalledWith(sender);
+  });
+
+  it("focuses the message input after switching conversations", async () => {
+    const { rerender } = render(ChatWorkspace, {
+      props: { conversation: conversation(), messages: [textMessage({ conversation_id: "direct:peer-a" })] },
+    });
+
+    await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveFocus());
+    await rerender({ conversation: conversation({ id: "direct:peer-b", title: "Bob" }) });
+    await waitFor(() => expect(screen.getByPlaceholderText("输入消息")).toHaveFocus());
+  });
+
   it("shows the quoted sender in the composer reply preview", () => {
     render(ChatWorkspace, {
       props: {

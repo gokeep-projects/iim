@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default desktop capability for IIM","local":true,"windows":["main"],"permissions":["core:default","dialog:default","fs:default","notification:default","opener:default","shell:default"]}}
+{"default":{"identifier":"default","description":"Default desktop capability for iim","local":true,"windows":["main"],"permissions":["core:default","dialog:default","notification:default"]}}

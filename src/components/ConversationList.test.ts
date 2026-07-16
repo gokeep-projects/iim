@@ -7,7 +7,7 @@ import {
 } from "@testing-library/svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ConversationList from "./ConversationList.svelte";
-import type { ChatMessage, ContactMetadata, ConversationSummary, PeerProfile } from "../api";
+import type { ContactMetadata, ConversationSummary, PeerProfile } from "../api";
 
 function conversation(
   id: string,
@@ -46,27 +46,6 @@ function peer(peerId: string, displayName: string): PeerProfile {
     status: "online",
     endpoints: [`${peerId}:24251`],
     fingerprint: `${peerId}-fingerprint`,
-  };
-}
-
-function chatMessage(
-  id: string,
-  conversationId: string,
-  body: string,
-  patch: Partial<ChatMessage> = {},
-): ChatMessage {
-  return {
-    id,
-    conversation_id: conversationId,
-    sender_id: "peer-a",
-    body,
-    attachments: [],
-    created_at: 1_700_000_001_000,
-    status: "received",
-    recalled: false,
-    favorited: false,
-    reactions: [],
-    ...patch,
   };
 }
 
@@ -160,6 +139,58 @@ describe("ConversationList filters", () => {
     expect(actions).toBeNull();
   });
 
+  it("uses a compact production sidebar with search-first conversation rows", () => {
+    render(ConversationList, {
+      props: {
+        conversations: [
+          conversation("direct:active", "Active Chat", { unread_count: 3 }),
+        ],
+      },
+    });
+
+    const row = screen.getByRole("button", { name: /Active Chat/ }).closest(".conversation-item");
+
+    expect(document.querySelector(".profile-card")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("联系人 / 聊天记录")).toBeInTheDocument();
+    expect(row).toHaveClass("conversation-item");
+    expect(row).not.toHaveClass("unread");
+    expect(row).not.toHaveClass("manual-unread");
+    expect(row?.querySelector(".conversation-main-button")).toBeInTheDocument();
+    expect(row?.querySelector(".conversation-side time")).toBeInTheDocument();
+    expect(row?.querySelector(".unread-badge")).toHaveClass("visually-hidden");
+    expect(row?.querySelector(".conversation-actions")).not.toBeInTheDocument();
+  });
+
+  it("makes group examples visually distinct without repeating the conversation heading", () => {
+    render(ConversationList, {
+      props: {
+        conversations: [conversation("group:project", "项目协作群")],
+      },
+    });
+
+    expect(screen.getByLabelText("项目协作群 群聊头像")).toHaveClass("group");
+    expect(screen.getAllByText("会话")).toHaveLength(1);
+  });
+
+  it("keeps manual unread state out of the visible row chrome", () => {
+    render(ConversationList, {
+      props: {
+        conversations: [
+          conversation("direct:manual", "Manual Chat", {
+            unread_count: 1,
+            manual_unread: true,
+          }),
+        ],
+      },
+    });
+
+    const row = screen.getByRole("button", { name: /Manual Chat/ }).closest(".conversation-item");
+
+    expect(row).not.toHaveClass("manual-unread");
+    expect(row?.querySelector(".conversation-state-chip.manual")).not.toBeInTheDocument();
+    expect(row?.querySelector(".unread-badge")).toHaveClass("visually-hidden");
+  });
+
   it("keeps conversation row management available through the context callback", async () => {
     const openContext = vi.fn();
     render(ConversationList, {
@@ -193,6 +224,7 @@ describe("ConversationList filters", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(button).toHaveAttribute("aria-busy", "true");
     expect(button).toHaveClass("refreshing");
+    expect(within(button).getByText("刷新中")).toBeInTheDocument();
 
     await vi.advanceTimersByTimeAsync(999);
     expect(button).toHaveAttribute("aria-busy", "true");
@@ -200,18 +232,38 @@ describe("ConversationList filters", () => {
     await vi.advanceTimersByTimeAsync(1);
     await waitFor(() => expect(button).toHaveAttribute("aria-busy", "false"));
     expect(button).not.toHaveClass("refreshing");
+    expect(within(button).getByText("已刷新")).toBeInTheDocument();
   });
 
-  it("opens a compact global search box for conversations, contacts, and records", async () => {
+  it("shows a failed refresh result instead of reporting completion", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn(() => Promise.resolve(false)) as unknown as () => Promise<void>;
+    render(ConversationList, {
+      props: {
+        conversations: [],
+        onRefreshPeers: refresh,
+      },
+    });
+
+    const button = screen.getByRole("button", { name: "刷新联系人" });
+    await fireEvent.click(button);
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.resolve();
+
+    expect(button).toHaveClass("failed");
+    expect(within(button).getByText("刷新失败")).toBeInTheDocument();
+  });
+
+  it("keeps a compact global search box visible above the sidebar tabs", async () => {
     render(ConversationList, {
       props: {
         conversations,
       },
     });
 
-    expect(screen.queryByPlaceholderText("用户名、主机名、IP 或聊天内容")).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("button", { name: "找人/搜索" }));
-    expect(screen.getByPlaceholderText("用户名、主机名、IP 或聊天内容")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("联系人 / 聊天记录")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "找人/搜索" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "聊天记录" })).not.toBeInTheDocument();
     expect(screen.queryByRole("listbox", { name: "搜索建议" })).not.toBeInTheDocument();
   });
 
@@ -323,7 +375,7 @@ describe("ConversationList filters", () => {
     expect(screen.queryByRole("tab", { name: /未读/ })).not.toBeInTheDocument();
   });
 
-  it("distinguishes manual unread markers from ordinary unread counts", () => {
+  it("keeps manual unread state out of visible conversation row chrome", () => {
     render(ConversationList, {
       props: {
         conversations: [
@@ -336,9 +388,9 @@ describe("ConversationList filters", () => {
     });
 
 	    const mainButton = screen.getByRole("button", { name: /Manual Chat/ });
-	    expect(mainButton.closest(".conversation-item")).toHaveClass("manual-unread");
+	    expect(mainButton.closest(".conversation-item")).not.toHaveClass("manual-unread");
 	    expect(within(mainButton).queryByText("未读标记")).not.toBeInTheDocument();
-	    expect(within(mainButton).getByTitle("手动标为未读")).toHaveClass("manual");
+	    expect(within(mainButton).queryByTitle("手动标为未读")).not.toBeInTheDocument();
 	    expect(screen.getByLabelText("Manual Chat 已标为未读")).toHaveClass("manual");
 	  });
 
@@ -505,7 +557,7 @@ describe("ConversationList filters", () => {
     expect(within(item).queryByText(/Alice 正在输入/)).not.toBeInTheDocument();
   });
 
-  it("hides draft and latest message previews while privacy mode is enabled", () => {
+  it("hides draft and latest message previews while privacy mode is enabled without noisy unread wording", () => {
     render(ConversationList, {
       props: {
         privacyMode: true,
@@ -522,8 +574,9 @@ describe("ConversationList filters", () => {
 
     expect(screen.queryByText("secret draft")).not.toBeInTheDocument();
     expect(screen.queryByText("payroll update")).not.toBeInTheDocument();
-    expect(screen.getByText("草稿已隐藏")).toBeInTheDocument();
-    expect(screen.getByText("消息预览已隐藏")).toBeInTheDocument();
+    expect(screen.getByText("有草稿")).toBeInTheDocument();
+    expect(screen.getByText("消息已隐藏")).toBeInTheDocument();
+    expect(screen.queryByText("有新消息")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: /secret draft|payroll update/ }),
     ).not.toBeInTheDocument();
@@ -569,7 +622,7 @@ describe("ConversationList filters", () => {
     });
 
     await fireEvent.click(screen.getByRole("tab", { name: /联系人/ }));
-    const presence = screen.getByLabelText("Alice 暂不可达");
+    const presence = screen.getByLabelText("peer-a.local 暂不可达");
     expect(presence).toHaveClass("offline");
     expect(presence).not.toHaveClass("away");
     expect(presence).toHaveAttribute("title", "暂不可达");
@@ -598,11 +651,9 @@ describe("ConversationList filters", () => {
     expect(screen.queryByRole("region", { name: "联系人概览" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "管理联系人" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "刷新联系人" })).toBeInTheDocument();
-    expect(
-      within(screen.getByRole("list", { name: "联系人列表" })).getByRole("group", {
-        name: "联系人分组 研发部",
-      }),
-    ).toBeInTheDocument();
+    const contactList = screen.getByRole("list", { name: "联系人列表" });
+    expect(within(contactList).queryByRole("group")).not.toBeInTheDocument();
+    expect(within(contactList).getByText("前端研发")).toBeInTheDocument();
   });
 
   it("keeps contact discovery free of duplicate status filter tabs", async () => {
@@ -622,9 +673,9 @@ describe("ConversationList filters", () => {
 
     expect(screen.getAllByRole("tablist")).toHaveLength(1);
     expect(screen.getAllByRole("tab")).toHaveLength(2);
-    expect(within(contactList).getByText("Alice")).toBeInTheDocument();
-    expect(within(contactList).getByText("Bob")).toBeInTheDocument();
-    expect(within(contactList).getByText("Carol")).toBeInTheDocument();
+    expect(within(contactList).getByText("peer-a.local")).toBeInTheDocument();
+    expect(within(contactList).getByText("peer-b.local")).toBeInTheDocument();
+    expect(within(contactList).getByText("peer-c.local")).toBeInTheDocument();
   });
 
   it("marks pinned conversations with row styling instead of visible pinned text", () => {
@@ -643,12 +694,8 @@ describe("ConversationList filters", () => {
     expect(within(mainButton).queryByText("置顶")).not.toBeInTheDocument();
   });
 
-  it("searches conversations, contacts, and chat records with keyboard selection", async () => {
+  it("searches conversations and contacts without mixing chat records into the sidebar", async () => {
     const selectConversation = vi.fn();
-    const openMessageResult = vi.fn();
-    const searchMessages = vi.fn(async () => [
-      chatMessage("msg-ops", "direct:ops", "ops release checklist"),
-    ]);
     render(ConversationList, {
       props: {
         conversations: [
@@ -664,33 +711,26 @@ describe("ConversationList filters", () => {
           },
         ],
         onSelectConversation: selectConversation,
-        onOpenMessageResult: openMessageResult,
-        onSearchMessages: searchMessages,
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "找人/搜索" }));
-    const input = screen.getByPlaceholderText("用户名、主机名、IP 或聊天内容");
+    const input = screen.getByPlaceholderText("联系人 / 聊天记录");
     await fireEvent.input(input, { target: { value: "ops" } });
 
     const suggestions = await screen.findByRole("listbox", { name: "搜索建议" });
-    expect(within(suggestions).getByText("会话")).toBeInTheDocument();
+    expect(within(suggestions).getByText("聊天记录")).toBeInTheDocument();
     expect(within(suggestions).getByText("联系人")).toBeInTheDocument();
-    await waitFor(() => expect(within(suggestions).getByText("记录")).toBeInTheDocument());
-    expect(within(suggestions).getByText("10.0.0.8:24251")).toBeInTheDocument();
-    expect(searchMessages).toHaveBeenCalledWith("ops");
+    expect(within(suggestions).getAllByText(/10\.0\.0\.8/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "找人/搜索" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "聊天记录" })).not.toBeInTheDocument();
 
-    await fireEvent.keyDown(input, { key: "ArrowDown" });
     await fireEvent.keyDown(input, { key: "ArrowDown" });
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(openMessageResult).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "msg-ops" }),
-    );
-    expect(selectConversation).not.toHaveBeenCalled();
+    expect(selectConversation).toHaveBeenCalledWith("direct:ops");
   });
 
-  it("groups sidebar contacts by saved contact group", async () => {
+  it("keeps sidebar contacts in one flat list", async () => {
     const selectConversation = vi.fn();
     render(ConversationList, {
       props: {
@@ -711,14 +751,12 @@ describe("ConversationList filters", () => {
 
     await fireEvent.click(screen.getByRole("tab", { name: /联系人/ }));
     const contactList = screen.getByRole("list", { name: "联系人列表" });
-    const engineering = within(contactList).getByRole("group", { name: "联系人分组 Engineering" });
-    const design = within(contactList).getByRole("group", { name: "联系人分组 Design" });
+    expect(within(contactList).queryByRole("group")).not.toBeInTheDocument();
+    expect(within(contactList).getByText("Alice")).toBeInTheDocument();
+    expect(within(contactList).getByText("Bob")).toBeInTheDocument();
+    expect(within(contactList).getByText("Carol")).toBeInTheDocument();
 
-    expect(within(engineering).getByText("Alice")).toBeInTheDocument();
-    expect(within(engineering).getByText("Bob")).toBeInTheDocument();
-    expect(within(design).getByText("Carol")).toBeInTheDocument();
-
-    await fireEvent.click(within(engineering).getByRole("button", { name: "与 Alice 聊天" }));
+    await fireEvent.click(within(contactList).getByRole("button", { name: "与 Alice 聊天" }));
 
     expect(selectConversation).toHaveBeenCalledWith("direct:peer-a");
   });
@@ -760,9 +798,9 @@ describe("ConversationList filters", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("tab", { name: /联系人 2 人/ }));
+    await fireEvent.click(screen.getByRole("tab", { name: /联系人 2/ }));
 
-    expect(screen.getByRole("tab", { name: /联系人 2 人/ })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: /联系人 2/ })).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -785,13 +823,27 @@ describe("ConversationList filters", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("tab", { name: /联系人 1 人/ }));
-    await fireEvent.click(screen.getByRole("button", { name: "与 Alice 聊天" }));
-    await fireEvent.click(screen.getByRole("button", { name: "查看 Alice 资料" }));
+    await fireEvent.click(screen.getByRole("tab", { name: /联系人 1/ }));
+    await fireEvent.click(screen.getByRole("button", { name: "与 peer-a.local 聊天" }));
+    await fireEvent.click(screen.getByRole("button", { name: "查看 peer-a.local 资料" }));
 
     expect(selectConversation).toHaveBeenCalledWith("direct:peer-a");
     expect(openPeerDetails).toHaveBeenCalledWith(
       expect.objectContaining({ peer_id: "peer-a" }),
     );
+  });
+
+  it("loads long conversation lists in batches", async () => {
+    render(ConversationList, {
+      props: {
+        conversations: Array.from({ length: 35 }, (_, index) =>
+          conversation(`direct:peer-${index}`, `会话 ${index + 1}`, { last_message_at: 2_000 - index }),
+        ),
+      },
+    });
+
+    expect(screen.getAllByRole("article")).toHaveLength(30);
+    await fireEvent.click(screen.getByRole("button", { name: "加载更多会话" }));
+    expect(screen.getAllByRole("article")).toHaveLength(35);
   });
 });

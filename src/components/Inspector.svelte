@@ -11,10 +11,13 @@
   import HardDrive from "lucide-svelte/icons/hard-drive";
   import Image from "lucide-svelte/icons/image";
   import MessageCircle from "lucide-svelte/icons/message-circle";
+  import Megaphone from "lucide-svelte/icons/megaphone";
+  import MoreHorizontal from "lucide-svelte/icons/more-horizontal";
   import Moon from "lucide-svelte/icons/moon";
   import Network from "lucide-svelte/icons/network";
   import Pin from "lucide-svelte/icons/pin";
   import PinOff from "lucide-svelte/icons/pin-off";
+  import Pencil from "lucide-svelte/icons/pencil";
   import RefreshCw from "lucide-svelte/icons/refresh-cw";
   import Save from "lucide-svelte/icons/save";
   import Search from "lucide-svelte/icons/search";
@@ -25,8 +28,12 @@
   import UploadCloud from "lucide-svelte/icons/upload-cloud";
   import UserMinus from "lucide-svelte/icons/user-minus";
   import UserPlus from "lucide-svelte/icons/user-plus";
+  import Users from "lucide-svelte/icons/users";
   import Volume2 from "lucide-svelte/icons/volume-2";
+  import Wifi from "lucide-svelte/icons/wifi";
+  import WifiOff from "lucide-svelte/icons/wifi-off";
   import X from "lucide-svelte/icons/x";
+  import UserAvatar from "./UserAvatar.svelte";
   import type { ChatMessage, ContactMetadata, ConversationSummary, NetworkSettings, PeerProfile, StorageOverview, TransferTask } from "../api";
 
   type InspectorTab = "details" | "transfers" | "network" | "security" | "members" | "storage";
@@ -35,6 +42,7 @@
   export let conversation: ConversationSummary | null = null;
   export let settings: NetworkSettings;
   export let activePeer: PeerProfile | null = null;
+  export let focusedPeer: PeerProfile | null = null;
   export let messages: ChatMessage[] = [];
   export let selfPeerId = "";
   export let contactMetadata: Record<string, ContactMetadata> = {};
@@ -43,6 +51,7 @@
   export let isGroup = false;
   export let groupNameDraft = "";
   export let groupAnnouncementDraft = "";
+  export let groupAnnouncementPinnedDraft = false;
   export let groupMemberDraftIds: string[] = [];
   export let canManageGroup = true;
   export let transferTasks: TransferTask[] = [];
@@ -53,10 +62,10 @@
   export let trustStatus = "";
   export let statusText = "";
   export let onTabChange: (value: InspectorTab) => void = () => {};
-  export let onCopyNetworkDiagnostics: (report: string) => void | Promise<void> = () => {};
   export let onTrustPeer: () => void | Promise<void> = () => {};
   export let onGroupNameChange: (value: string) => void = () => {};
   export let onGroupAnnouncementChange: (value: string) => void = () => {};
+  export let onSaveGroupAnnouncement: (value: string, pinned: boolean) => void | Promise<void> = () => {};
   export let onToggleGroupMember: (peerId: string) => void = () => {};
   export let onSaveGroup: () => void | Promise<void> = () => {};
   export let onExportConversation: () => void | Promise<void> = () => {};
@@ -73,14 +82,20 @@
   export let onClearStagedFiles: () => void | Promise<void> = () => {};
   export let onOpenStorage: (kind: "data" | "received" | "staged") => void | Promise<void> = () => {};
   export let onCopyStoragePath: (path: string, label: string) => void | Promise<void> = () => {};
-  export let onCopyStorageDiagnostics: (report: string) => void | Promise<void> = () => {};
   export let onCopyIdentityValue: (value: string, label: string) => void | Promise<void> = () => {};
   export let onOpenDirectConversation: (peerId: string) => void | Promise<void> = () => {};
   export let onContactMetadataChange: (peerId: string, patch: Partial<ContactMetadata>) => void = () => {};
   export let onSaveContactMetadata: (peerId: string) => void | Promise<void> = () => {};
+  export let onClose: () => void = () => {};
 
   let memberQuery = "";
-  let memberReachabilityFilter: "all" | "online" | "offline" = "all";
+  let memberAddQuery = "";
+  let memberAddDialogOpen = false;
+  let memberMorePeerId = "";
+  let announcementDialogOpen = false;
+  let announcementEditorValue = "";
+  let announcementPinnedEditor = false;
+  let announcementSaving = false;
   let sharedImagePreview:
     | {
         name: string;
@@ -92,15 +107,24 @@
       }
     | null = null;
 
-  $: tabs = isGroup
-    ? ([{ id: "members", label: "成员" }, { id: "transfers", label: "文件" }] as const)
-    : ([{ id: "details", label: "详情" }, { id: "transfers", label: "文件" }] as const);
+  $: profileMode = Boolean(focusedPeer);
+  $: detailPeer = focusedPeer ?? activePeer;
+  $: tabs = profileMode
+    ? ([{ id: "details", label: "成员资料" }] as const)
+    : isGroup
+      ? ([{ id: "details", label: "群资料" }, { id: "members", label: "成员" }, { id: "transfers", label: "文件" }] as const)
+      : ([{ id: "details", label: "详情" }, { id: "transfers", label: "文件" }] as const);
   $: visibleTab = tabs.some((item) => item.id === tab) ? tab : tabs[0].id;
 
   function formatBytes(bytes: number) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function transferProgress(task: TransferTask) {
+    if (task.totalBytes <= 0) return 0;
+    return Math.min(100, Math.max(0, Math.round((task.sentBytes / task.totalBytes) * 100)));
   }
 
   function fileName(path: string) {
@@ -134,6 +158,31 @@
 
   function closeSharedImagePreview() {
     sharedImagePreview = null;
+  }
+
+  function openAnnouncementEditor() {
+    if (!canManageGroup) return;
+    announcementEditorValue = groupAnnouncementDraft;
+    announcementPinnedEditor = groupAnnouncementPinnedDraft;
+    announcementDialogOpen = true;
+  }
+
+  function closeAnnouncementEditor() {
+    if (announcementSaving) return;
+    announcementDialogOpen = false;
+  }
+
+  async function saveAnnouncementEditor() {
+    if (!canManageGroup || announcementSaving) return;
+    announcementSaving = true;
+    try {
+      const value = announcementEditorValue.trim();
+      await onSaveGroupAnnouncement(value, value ? announcementPinnedEditor : false);
+      onGroupAnnouncementChange(value);
+      announcementDialogOpen = false;
+    } finally {
+      announcementSaving = false;
+    }
   }
 
   function peerLabel(peer: PeerProfile) {
@@ -180,7 +229,7 @@
       .join(" / ");
 
     return [
-      "灵犀内网通存储诊断",
+      "iim 存储诊断",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `数据目录：${storageOverview?.data_dir ?? "未加载"}`,
       `数据库：${storageOverview?.database_path ?? "未加载"}`,
@@ -203,7 +252,7 @@
     const knownPeers = allPeers.length > 0 ? allPeers : peers;
     const onlinePeers = knownPeers.filter((peer) => peer.status === "online").length;
     return [
-      "灵犀内网通网络诊断",
+      "iim 网络诊断",
       `自动发现：${settings.auto_discovery ? "开启" : "关闭"}`,
       `局域网广播：${settings.multicast ? "开启" : "关闭"}`,
       `发现设备：${knownPeers.length}`,
@@ -212,47 +261,6 @@
       `离线判定：${settings.peer_ttl_secs}s`,
       `最近警告：${networkWarnings.join(" | ") || networkWarning || "无"}`,
       `当前输入告警：${networkInputWarning || "无"}`
-    ].join("\n");
-  }
-
-  function conversationDiagnosticReport() {
-    const messageCount = messages.length;
-    const attachmentCount = messages.reduce((sum, message) => sum + message.attachments.length, 0);
-    const attachmentFileCount = messages.reduce(
-      (sum, message) =>
-        sum + message.attachments.reduce((attachmentSum, attachment) => attachmentSum + attachment.manifest.files.length, 0),
-      0
-    );
-    const failedTransfers = visibleTransferTasks.filter(isFailedTransfer);
-    const activeTransfers = visibleTransferTasks.filter(isActiveTransfer);
-    const failedMessages = messages.filter((message) => message.status === "failed").length;
-    const retryingMessages = messages.filter((message) => ["queued", "sending"].includes(message.status)).length;
-    const title = conversation?.title || groupNameDraft || activePeer?.display_name || "未选择会话";
-    const conversationId = conversation?.id || activePeer?.peer_id || "未选择会话";
-    const memberSummary = isGroup
-      ? `成员 ${groupMemberTotalCount}，可联系 ${reachableGroupMemberCount}，暂不可达 ${unreachableGroupMemberCount}`
-      : activePeer
-        ? `${peerLabel(activePeer)} ${peerStatusLabel(activePeer)}，端点 ${activePeer.endpoints.join(", ") || "等待发现"}`
-        : "无直连联系人";
-
-    return [
-      "灵犀内网通会话诊断",
-      `生成时间：${new Date().toLocaleString("zh-CN")}`,
-      `会话：${title}`,
-      `会话 ID：${conversationId}`,
-      `类型：${isGroup ? "群聊" : "直连"}`,
-      `成员/联系人：${memberSummary}`,
-      `置顶：${conversation?.pinned ? "是" : "否"}`,
-      `免打扰：${conversation?.muted ? "是" : "否"}`,
-      `归档：${conversation?.archived ? "是" : "否"}`,
-      `消息数量：${messageCount}`,
-      `待发送/发送中消息：${retryingMessages}`,
-      `失败消息：${failedMessages}`,
-      `附件消息：${attachmentCount}`,
-      `附件文件：${attachmentFileCount}`,
-      `活跃传输：${activeTransfers.length}`,
-      `失败传输：${failedTransfers.length}`,
-      `最近网络警告：${networkWarnings.join(" | ") || networkWarning || "无"}`
     ].join("\n");
   }
 
@@ -267,6 +275,14 @@
       .join(" ")
       .toLowerCase()
       .includes(query);
+  }
+
+  function endpointIp(endpoint: string) {
+    const value = endpoint.trim();
+    if (!value) return "";
+    if (value.startsWith("[")) return value.slice(1, value.indexOf("]") > 0 ? value.indexOf("]") : undefined);
+    const colonCount = (value.match(/:/g) ?? []).length;
+    return colonCount === 1 ? value.slice(0, value.lastIndexOf(":")) : value;
   }
 
   function matchesMemberReachability(peer: PeerProfile, filter = memberReachabilityFilter) {
@@ -345,17 +361,9 @@
   $: unreachableGroupMemberCount = groupMemberTotalCount - reachableGroupMemberCount;
   $: groupOwnerPeerId = conversation?.group_owner_peer_id?.trim() ?? "";
   $: groupOwnerLabel = groupOwnerPeerId ? peerLabelById(groupOwnerPeerId) : "本机";
-  $: visibleCurrentGroupMembers = peers.filter((peer) => matchesMemberQuery(peer, memberQuery) && matchesMemberReachability(peer, memberReachabilityFilter));
-  $: visibleUnresolvedGroupMemberIds = unresolvedGroupMemberIds.filter(
-    (peerId) => matchesUnresolvedMemberQuery(peerId, memberQuery) && matchesUnresolvedMemberReachability(memberReachabilityFilter)
-  );
-  $: visibleAvailableGroupPeers = allPeers.filter(
-    (peer) =>
-      !peerBlocked(peer) &&
-      !currentGroupMemberIds.has(peer.peer_id) &&
-      matchesMemberQuery(peer, memberQuery) &&
-      matchesMemberReachability(peer, memberReachabilityFilter)
-  );
+  $: visibleCurrentGroupMembers = peers.filter((peer) => matchesMemberQuery(peer, memberQuery));
+  $: visibleUnresolvedGroupMemberIds = unresolvedGroupMemberIds.filter((peerId) => matchesUnresolvedMemberQuery(peerId, memberQuery));
+  $: visibleMemberCandidates = allPeers.filter((peer) => !peerBlocked(peer) && matchesMemberQuery(peer, memberAddQuery));
   $: reachableAvailableGroupPeers = allPeers.filter(
     (peer) =>
       peer.status === "online" &&
@@ -368,7 +376,7 @@
   );
   $: unresolvedRemovableGroupMemberIds = unresolvedGroupMemberIds.filter((peerId) => draftGroupMemberIds.has(peerId));
   $: removableUnavailableMemberCount = unreachableRemovableGroupMembers.length + unresolvedRemovableGroupMemberIds.length;
-  $: activePeerPresenceAriaLabel = `${activePeer ? peerLabel(activePeer) : "未选择联系人"} ${peerStatusLabel(activePeer)}状态`;
+  $: activePeerPresenceAriaLabel = `${detailPeer ? peerLabel(detailPeer) : "未选择联系人"} ${peerStatusLabel(detailPeer)}状态`;
   $: visibleTransferTasks = conversation
     ? transferTasks.filter((task) => !task.conversationId || task.conversationId === conversation.id)
     : transferTasks;
@@ -394,78 +402,94 @@
   $: storageCacheBytes = storageOverview ? storageOverview.received_bytes + storageOverview.staged_bytes : 0;
 </script>
 
-<aside class="inspector" aria-label={isGroup ? "群成员与会话面板" : "会话详情面板"}>
+<aside class="inspector" aria-label={profileMode ? "成员资料面板" : isGroup ? "群成员与会话面板" : "会话详情面板"}>
   <div class="inspector-tabs" role="tablist">
     {#each tabs as item}
       <button class:active={visibleTab === item.id} type="button" role="tab" on:click={() => onTabChange(item.id)}>
+        {#if item.id === "details"}
+          {#if isGroup && !profileMode}<Megaphone size={13} />{:else}<CheckCircle2 size={13} />{/if}
+        {:else if item.id === "members"}
+          <UserPlus size={13} />
+        {:else}
+          <HardDrive size={13} />
+        {/if}
         {item.label}
       </button>
     {/each}
+    <button class="inspector-close-button" type="button" title="收起详情" aria-label="收起详情" on:click={onClose}>
+      <X size={14} />
+    </button>
   </div>
 
-  {#if visibleTab === "members"}
-    <section class="inspector-panel">
-      <h2>群成员</h2>
-      <div class="group-summary-card" aria-label="群资料摘要">
+  {#if visibleTab === "details" && isGroup && !profileMode}
+    <section class="inspector-panel group-profile-panel">
+      <h2 class="visually-hidden">群资料</h2>
+      <header class="group-profile-identity">
+        <UserAvatar name={groupNameDraft || conversation?.title || "内网群聊"} seed={conversation?.id || "group"} size={48} />
         <div>
           <strong>{groupNameDraft || conversation?.title || "内网群聊"}</strong>
-          <span>群资料</span>
+          <span><Users size={13} />{groupMemberTotalCount} 名成员</span>
         </div>
-        <dl>
-          <div>
-            <dt>当前</dt>
-            <dd>{groupMemberTotalCount} 人</dd>
-          </div>
-          <div>
-            <dt>可联系</dt>
-            <dd>{reachableGroupMemberCount} 人</dd>
-          </div>
-          <div>
-            <dt>创建者</dt>
-            <dd>{groupOwnerLabel}</dd>
-          </div>
-          <div>
-            <dt>待保存</dt>
-            <dd>+{pendingAddedMemberCount} / -{pendingRemovedMemberCount}</dd>
-          </div>
-        </dl>
-      </div>
-      <label class="field">
-        <span>群名称</span>
-        <input
-          value={groupNameDraft}
-          placeholder="内网群聊"
-          disabled={!canManageGroup}
-          on:input={(event) => onGroupNameChange((event.currentTarget as HTMLInputElement).value)}
-        />
-      </label>
-      <label class="field">
-        <span>群公告</span>
-        <textarea
-          aria-label="群公告"
-          rows="3"
-          value={groupAnnouncementDraft}
-          placeholder="填写发布窗口、值班规则或群内约定"
-          disabled={!canManageGroup}
-          on:input={(event) => onGroupAnnouncementChange((event.currentTarget as HTMLTextAreaElement).value)}
-        ></textarea>
-      </label>
+      </header>
+
+      <section class:announcement-pinned={groupAnnouncementPinnedDraft} class="group-profile-announcement" aria-label="群公告资料">
+        <header>
+          <span class="group-profile-section-title"><Megaphone size={15} />群公告</span>
+          <span class="group-profile-announcement-actions">
+            {#if groupAnnouncementDraft && groupAnnouncementPinnedDraft}<span class="announcement-pin-state"><Pin size={11} />已置顶</span>{/if}
+            {#if canManageGroup}
+              <button class="icon-action" type="button" title="编辑群公告" aria-label="编辑群公告" on:click={openAnnouncementEditor}>
+                <Pencil size={14} />
+              </button>
+            {/if}
+          </span>
+        </header>
+        {#if groupAnnouncementDraft}
+          <p>{groupAnnouncementDraft}</p>
+        {:else}
+          <p class="group-profile-empty">{canManageGroup ? "还没有群公告，点击编辑发布。" : "群创建者尚未发布公告。"}</p>
+        {/if}
+      </section>
+
+      <section class="group-profile-settings" aria-label="群基础资料">
+        <label class="group-profile-name-field">
+          <span>群聊名称</span>
+          <input
+            value={groupNameDraft}
+            placeholder="内网群聊"
+            disabled={!canManageGroup}
+            on:input={(event) => onGroupNameChange((event.currentTarget as HTMLInputElement).value)}
+          />
+        </label>
+        <div class="group-profile-meta-row">
+          <span>创建者</span>
+          <strong>{groupOwnerLabel}</strong>
+        </div>
+      </section>
+
+      {#if canManageGroup}
+        <button class="group-profile-save" type="button" disabled={!groupNameDraft.trim()} on:click={onSaveGroup}>
+          <Save size={14} />保存群名称
+        </button>
+      {:else}
+        <p class="group-profile-permission">群资料仅可由创建者编辑</p>
+      {/if}
+    </section>
+  {:else if visibleTab === "members"}
+    <section class="inspector-panel">
       <div class="group-editor">
         <div class="group-editor-head">
           <div>
-            <strong>成员编辑</strong>
-            <small>{canManageGroup ? `${groupMemberDraftIds.length} 名远端成员` : "仅创建者可调整成员"}</small>
+            <strong>当前成员</strong>
+            <small>{canManageGroup ? `${groupMemberTotalCount} 人` : `${groupMemberTotalCount} 人 · 仅创建者可管理`}</small>
           </div>
-          <div class="group-editor-actions">
-            <button type="button" disabled={!canManageGroup || reachableAvailableGroupPeers.length === 0} on:click={addReachableAvailableMembers}>
-              <UserPlus size={13} />
-              添加可联系 {reachableAvailableGroupPeers.length}
-            </button>
-            <button type="button" disabled={!canManageGroup || removableUnavailableMemberCount === 0} on:click={removeUnreachableCurrentMembers}>
-              <UserMinus size={13} />
-              移除暂不可达 {removableUnavailableMemberCount}
-            </button>
-          </div>
+          <button class="member-add-command" type="button" disabled={!canManageGroup} on:click={() => {
+            memberAddQuery = "";
+            memberAddDialogOpen = true;
+          }}>
+            <UserPlus size={14} />
+            添加成员
+          </button>
         </div>
         <label class="member-search">
           <Search size={14} />
@@ -476,94 +500,48 @@
             on:input={(event) => (memberQuery = (event.currentTarget as HTMLInputElement).value)}
           />
         </label>
-        <div class="member-filter-row" role="group" aria-label="成员可达性筛选">
-          <button
-            class:active={memberReachabilityFilter === "all"}
-            type="button"
-            aria-pressed={memberReachabilityFilter === "all"}
-            on:click={() => (memberReachabilityFilter = "all")}
-          >
-            全部 {groupMemberTotalCount}
-          </button>
-          <button
-            class:active={memberReachabilityFilter === "online"}
-            type="button"
-            aria-pressed={memberReachabilityFilter === "online"}
-            on:click={() => (memberReachabilityFilter = "online")}
-          >
-            可联系 {reachableGroupMemberCount}
-          </button>
-          <button
-            class:active={memberReachabilityFilter === "offline"}
-            type="button"
-            aria-pressed={memberReachabilityFilter === "offline"}
-            on:click={() => (memberReachabilityFilter = "offline")}
-          >
-            暂不可达 {unreachableGroupMemberCount}
-          </button>
-        </div>
         <div class="member-section" role="group" aria-label="当前群成员">
-          <header>
-            <span>当前成员</span>
-            <small>{visibleCurrentGroupMembers.length + visibleUnresolvedGroupMemberIds.length}</small>
-          </header>
           <div class="member-picker-list vertical">
             {#each visibleCurrentGroupMembers as peer (peer.peer_id)}
               <article class={`member-edit-row ${peer.peer_id !== selfPeerId && !draftGroupMemberIds.has(peer.peer_id) ? "pending-remove" : ""}`}>
-                <span
-                  class:online={peer.status === "online"}
-                  class:offline={peer.status !== "online"}
-                  class="presence"
-                  aria-label={`${peerLabel(peer)} ${peerStatusLabel(peer)}状态`}
-                  title={peerStatusLabel(peer)}
-                ></span>
+                <UserAvatar name={peerLabel(peer)} seed={peer.peer_id} size={34} />
                 <div class="member-row-copy">
-                  <strong>{peerLabel(peer)}{peer.peer_id === selfPeerId ? "（我）" : ""}</strong>
-                  <small>{peer.hostname || "未知主机"}</small>
+                  <strong>
+                    {peerLabel(peer)}{peer.peer_id === selfPeerId ? "（我）" : ""}
+                    {#if peer.peer_id === groupOwnerPeerId}<span class="group-owner-badge">群主</span>{/if}
+                  </strong>
+                  <small class="member-presence-line">
+                    {#if peer.status === "online"}<Wifi size={12} />{:else}<WifiOff size={12} />{/if}
+                    {peer.status === "online" ? "在线" : "离线"}{endpointIp(peer.endpoints[0] ?? "") ? ` · ${endpointIp(peer.endpoints[0])}` : ""}
+                  </small>
                 </div>
-                {#if peer.peer_id === selfPeerId}
-                  <span class="member-lock">本机</span>
-                {:else}
-                  <div class="member-row-actions">
-                    <button class="icon-action" type="button" title={`与 ${peerLabel(peer)} 私聊`} on:click={() => onOpenDirectConversation(peer.peer_id)}>
-                      <MessageCircle size={14} />
+                <div class="member-row-actions compact">
+                  {#if peer.peer_id !== selfPeerId}
+                    <button class:restore={!draftGroupMemberIds.has(peer.peer_id)} class="icon-action danger" type="button" disabled={!canManageGroup} title={draftGroupMemberIds.has(peer.peer_id) ? `移除 ${peerLabel(peer)}` : `撤销移除 ${peerLabel(peer)}`} on:click={() => canManageGroup && onToggleGroupMember(peer.peer_id)}>
+                      {#if draftGroupMemberIds.has(peer.peer_id)}<UserMinus size={14} />{:else}<UserPlus size={14} />{/if}
                     </button>
-                    <button class="icon-action" type="button" title={`复制 ${peerLabel(peer)} 设备 ID`} on:click={() => onCopyIdentityValue(peer.peer_id, `${peerLabel(peer)} 设备 ID`)}>
-                      <Copy size={14} />
-                    </button>
-                    {#if peer.endpoints.length > 0}
-                      <button class="icon-action" type="button" title={`复制 ${peerLabel(peer)} 直连端点`} on:click={() => onCopyIdentityValue(peer.endpoints.join("\n"), `${peerLabel(peer)} 直连端点`)}>
-                        <Network size={14} />
-                      </button>
-                    {/if}
-                    <button class="icon-action" type="button" title={`复制 ${peerLabel(peer)} 设备指纹`} on:click={() => onCopyIdentityValue(peer.fingerprint, `${peerLabel(peer)} 设备指纹`)}>
-                      <ShieldCheck size={14} />
-                    </button>
-                    {#if draftGroupMemberIds.has(peer.peer_id)}
-                      <button class="icon-action danger" type="button" disabled={!canManageGroup} title={`从群聊移除 ${peerLabel(peer)}`} on:click={() => canManageGroup && onToggleGroupMember(peer.peer_id)}>
-                        <UserMinus size={14} />
-                      </button>
-                    {:else}
-                      <button class="icon-action" type="button" disabled={!canManageGroup} title={`恢复 ${peerLabel(peer)}`} on:click={() => canManageGroup && onToggleGroupMember(peer.peer_id)}>
-                        <UserPlus size={14} />
-                      </button>
-                    {/if}
-                  </div>
-                {/if}
+                  {/if}
+                  <button class="icon-action" type="button" title={`更多 ${peerLabel(peer)}`} aria-label={`更多 ${peerLabel(peer)}`} on:click={() => (memberMorePeerId = memberMorePeerId === peer.peer_id ? "" : peer.peer_id)}>
+                    <MoreHorizontal size={15} />
+                  </button>
+                  {#if memberMorePeerId === peer.peer_id}
+                    <div class="member-more-menu" role="menu" aria-label={`${peerLabel(peer)} 更多操作`}>
+                      {#if peer.peer_id !== selfPeerId}<button type="button" role="menuitem" on:click={() => onOpenDirectConversation(peer.peer_id)}><MessageCircle size={13} />私聊</button>{/if}
+                      <button type="button" role="menuitem" on:click={() => onCopyIdentityValue(peer.peer_id, `${peerLabel(peer)} 设备 ID`)}><Copy size={13} />复制 ID</button>
+                      <button type="button" role="menuitem" on:click={() => onCopyIdentityValue(peer.fingerprint, `${peerLabel(peer)} 设备指纹`)}><ShieldCheck size={13} />复制指纹</button>
+                    </div>
+                  {/if}
+                </div>
               </article>
             {/each}
             {#each visibleUnresolvedGroupMemberIds as peerId (peerId)}
               <article class="member-edit-row unresolved">
-                <span
-                  class="presence offline"
-                  aria-label={`未发现成员 ${peerId} 暂不可达状态`}
-                  title="暂不可达"
-                ></span>
+                <UserAvatar name="未发现成员" seed={peerId} size={34} />
                 <div class="member-row-copy">
                   <strong>未发现成员</strong>
-                  <small>{peerId}</small>
+                  <small class="member-presence-line"><WifiOff size={12} />离线 · {peerId}</small>
                 </div>
-                <div class="member-row-actions">
+                <div class="member-row-actions compact">
                   <button class="icon-action danger" type="button" disabled={!canManageGroup} title={`从群聊移除 ${peerId}`} on:click={() => canManageGroup && onToggleGroupMember(peerId)}>
                     <UserMinus size={14} />
                   </button>
@@ -575,103 +553,79 @@
             {/if}
           </div>
         </div>
-        <div class="member-section" role="group" aria-label="可添加联系人">
-          <header>
-            <span>可添加联系人</span>
-            <small>{visibleAvailableGroupPeers.length}</small>
-          </header>
-          <div class="member-picker-list vertical">
-            {#each visibleAvailableGroupPeers as peer (peer.peer_id)}
-              <article class={`member-edit-row ${draftGroupMemberIds.has(peer.peer_id) ? "pending-add" : ""}`}>
-                <span
-                  class:online={peer.status === "online"}
-                  class:offline={peer.status !== "online"}
-                  class="presence"
-                  aria-label={`${peerLabel(peer)} ${peerStatusLabel(peer)}状态`}
-                  title={peerStatusLabel(peer)}
-                ></span>
-                <div class="member-row-copy">
-                  <strong>{peerLabel(peer)}</strong>
-                  <small>{peer.hostname} · {peer.endpoints[0] ?? "等待端点"}</small>
-                </div>
-                <button class="icon-action" type="button" disabled={!canManageGroup} title={`${draftGroupMemberIds.has(peer.peer_id) ? "取消添加" : "添加"} ${peerLabel(peer)}`} on:click={() => canManageGroup && onToggleGroupMember(peer.peer_id)}>
-                  {#if draftGroupMemberIds.has(peer.peer_id)}
-                    <UserMinus size={14} />
-                  {:else}
-                    <UserPlus size={14} />
-                  {/if}
-                </button>
-              </article>
-            {:else}
-              <p class="empty-note">没有可添加联系人</p>
-            {/each}
+        {#if memberAddDialogOpen}
+          <div class="member-add-dialog-backdrop" role="presentation" on:click={() => (memberAddDialogOpen = false)}>
+            <div class="member-add-dialog" role="dialog" aria-modal="true" aria-label="添加群成员" tabindex="-1" on:click|stopPropagation on:keydown={(event) => {
+              if (event.key === "Escape") memberAddDialogOpen = false;
+            }}>
+              <header>
+                <strong>添加群成员</strong>
+                <button class="icon-action" type="button" aria-label="关闭添加成员" on:click={() => (memberAddDialogOpen = false)}><X size={15} /></button>
+              </header>
+              <label class="member-search">
+                <Search size={14} />
+                <input value={memberAddQuery} aria-label="搜索可添加成员" placeholder="搜索姓名、主机或 IP" on:input={(event) => (memberAddQuery = (event.currentTarget as HTMLInputElement).value)} />
+              </label>
+              <div class="member-candidate-list">
+                {#each visibleMemberCandidates as peer (peer.peer_id)}
+                  <article class="member-candidate-row">
+                    <UserAvatar name={peerLabel(peer)} seed={peer.peer_id} size={34} />
+                    <div>
+                      <strong>{peerLabel(peer)}</strong>
+                      <small>{peer.status === "online" ? "在线" : "离线"}{endpointIp(peer.endpoints[0] ?? "") ? ` · ${endpointIp(peer.endpoints[0])}` : ""}</small>
+                    </div>
+                    {#if draftGroupMemberIds.has(peer.peer_id) || peer.peer_id === selfPeerId}
+                      <span class="member-added-mark">已添加</span>
+                    {:else}
+                      <button type="button" disabled={!canManageGroup} on:click={() => onToggleGroupMember(peer.peer_id)}>添加</button>
+                    {/if}
+                  </article>
+                {:else}
+                  <p class="empty-note">没有匹配的联系人</p>
+                {/each}
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="inspector-action-grid">
-          <button
-            class="action-card primary-card"
-            type="button"
-            aria-label="保存群资料"
-            disabled={!canManageGroup || !groupNameDraft.trim() || groupMemberDraftIds.length === 0}
-            on:click={onSaveGroup}
-          >
-            <Save size={15} />
-            <span>
-              <strong>保存群资料</strong>
-              <small>{canManageGroup ? "同步名称与成员" : "仅创建者可保存"}</small>
-            </span>
-          </button>
-          <button class="action-card" type="button" aria-label="导出聊天记录" on:click={onExportConversation}>
-            <Download size={15} />
-            <span>
-              <strong>导出聊天记录</strong>
-              <small>生成本地副本</small>
-            </span>
-          </button>
-          <button class="action-card" type="button" aria-label="复制会话诊断" on:click={() => onCopyIdentityValue(conversationDiagnosticReport(), "会话诊断报告")}>
-            <Copy size={15} />
-            <span>
-              <strong>复制会话诊断</strong>
-              <small>排查连接状态</small>
-            </span>
-          </button>
-        </div>
+        {/if}
       </div>
-      {#if pendingAddedMemberCount > 0 || pendingRemovedMemberCount > 0}
-        <p class="hint">群成员变更将在保存群资料后广播给成员：新增 {pendingAddedMemberCount} 人，移除 {pendingRemovedMemberCount} 人。</p>
-      {:else}
-        <p class="hint">当前群资料已与本机记录保持一致。</p>
+      {#if canManageGroup && (pendingAddedMemberCount > 0 || pendingRemovedMemberCount > 0)}
+        <div class="group-member-save-bar" role="status">
+          <span>新增 {pendingAddedMemberCount} · 移除 {pendingRemovedMemberCount}</span>
+          <button type="button" aria-label="保存成员变更" disabled={groupMemberDraftIds.length === 0} on:click={onSaveGroup}>
+            <Save size={13} />保存
+          </button>
+        </div>
       {/if}
     </section>
   {:else if visibleTab === "details"}
     <section class="inspector-panel">
-      <h2>会话详情</h2>
+      <h2 class="visually-hidden">会话详情</h2>
       <div class="status-card">
         <CheckCircle2 size={16} />
-        <span>{activePeer ? peerLabel(activePeer) : "未选择联系人"}</span>
+        <span>{detailPeer ? peerLabel(detailPeer) : "未选择联系人"}</span>
         <span
           aria-label={activePeerPresenceAriaLabel}
-          class:online={activePeer?.status === "online"}
-          class:offline={activePeer?.status !== "online"}
+          class:online={detailPeer?.status === "online"}
+          class:offline={detailPeer?.status !== "online"}
           class="presence-dot"
-          title={peerStatusLabel(activePeer)}
+          title={peerStatusLabel(detailPeer)}
         ></span>
       </div>
       <dl>
         <div>
           <dt>主机</dt>
-          <dd>{activePeer?.hostname ?? "未知"}</dd>
+          <dd>{detailPeer?.hostname ?? "未知"}</dd>
         </div>
         <div>
-          <dt>端点</dt>
+          <dt>IP 地址</dt>
           <dd class="identity-value-row">
-            <span title={activePeer?.endpoints.join("\n") || "等待发现"}>{activePeer?.endpoints.join("、") || "等待发现"}</span>
-            {#if activePeer && activePeer.endpoints.length > 0}
+            <span>{detailPeer?.endpoints.map(endpointIp).filter(Boolean).join("、") || "等待发现"}</span>
+            {#if detailPeer && detailPeer.endpoints.length > 0}
               <button
                 type="button"
-                aria-label={`复制 ${peerLabel(activePeer)} 直连端点`}
-                title={`复制 ${peerLabel(activePeer)} 直连端点`}
-                on:click={() => onCopyIdentityValue(activePeer.endpoints.join("\n"), `${peerLabel(activePeer)} 直连端点`)}
+                aria-label={`复制 ${peerLabel(detailPeer)} IP 地址`}
+                title={`复制 ${peerLabel(detailPeer)} IP 地址`}
+                on:click={() => onCopyIdentityValue(detailPeer.endpoints.map(endpointIp).filter(Boolean).join("\n"), `${peerLabel(detailPeer)} IP 地址`)}
               >
                 <Copy size={13} />
               </button>
@@ -679,104 +633,87 @@
           </dd>
         </div>
       </dl>
-      {#if activePeer}
-        <section class="direct-contact-card" aria-label="联系人资料">
-          <header>
-            <div>
-              <strong>联系人资料</strong>
-              <span>{metadataForPeer(activePeer).favorite ? "已星标" : "普通联系人"} · {metadataForPeer(activePeer).blocked ? "已阻止" : "可联系"}</span>
+      {#if detailPeer}
+        <details class="inspector-disclosure direct-contact-card" aria-label="联系人资料">
+          <summary>
+            <span><strong>联系人设置</strong><small>备注、分组与权限</small></span>
+          </summary>
+          <div class="inspector-disclosure-body">
+            <label class="field compact-field">
+              <span>备注</span>
+              <input
+                value={metadataForPeer(detailPeer).remark}
+                placeholder={detailPeer.display_name}
+                on:input={(event) =>
+                  onContactMetadataChange(detailPeer.peer_id, { remark: (event.currentTarget as HTMLInputElement).value })}
+              />
+            </label>
+            <label class="field compact-field">
+              <span>分组</span>
+              <input
+                value={metadataForPeer(detailPeer).group_name}
+                placeholder="默认分组"
+                on:input={(event) =>
+                  onContactMetadataChange(detailPeer.peer_id, { group_name: (event.currentTarget as HTMLInputElement).value })}
+              />
+            </label>
+            <div class="contact-toggle-row">
+              <button
+                class:active={metadataForPeer(detailPeer).favorite}
+                type="button"
+                on:click={() => onContactMetadataChange(detailPeer.peer_id, { favorite: !metadataForPeer(detailPeer).favorite })}
+              >
+                <Star size={14} />
+                {metadataForPeer(detailPeer).favorite ? "取消星标" : "星标联系人"}
+              </button>
+              <button
+                class:danger={metadataForPeer(detailPeer).blocked}
+                type="button"
+                on:click={() => onContactMetadataChange(detailPeer.peer_id, { blocked: !metadataForPeer(detailPeer).blocked })}
+              >
+                <Ban size={14} />
+                {metadataForPeer(detailPeer).blocked ? "取消阻止" : "阻止联系人"}
+              </button>
             </div>
-            <span
-              aria-label={`${peerLabel(activePeer)} ${peerStatusLabel(activePeer)}状态`}
-              class:online={activePeer.status === "online"}
-              class:offline={activePeer.status !== "online"}
-              class="presence-dot"
-              title={peerStatusLabel(activePeer)}
-            ></span>
-          </header>
-          <label class="field compact-field">
-            <span>备注</span>
-            <input
-              value={metadataForPeer(activePeer).remark}
-              placeholder={activePeer.display_name}
-              on:input={(event) =>
-                onContactMetadataChange(activePeer.peer_id, { remark: (event.currentTarget as HTMLInputElement).value })}
-            />
-          </label>
-          <label class="field compact-field">
-            <span>分组</span>
-            <input
-              value={metadataForPeer(activePeer).group_name}
-              placeholder="默认分组"
-              on:input={(event) =>
-                onContactMetadataChange(activePeer.peer_id, { group_name: (event.currentTarget as HTMLInputElement).value })}
-            />
-          </label>
-          <div class="contact-toggle-row">
-            <button
-              class:active={metadataForPeer(activePeer).favorite}
-              type="button"
-              on:click={() => onContactMetadataChange(activePeer.peer_id, { favorite: !metadataForPeer(activePeer).favorite })}
-            >
-              <Star size={14} />
-              {metadataForPeer(activePeer).favorite ? "取消星标" : "星标联系人"}
-            </button>
-            <button
-              class:danger={metadataForPeer(activePeer).blocked}
-              type="button"
-              on:click={() => onContactMetadataChange(activePeer.peer_id, { blocked: !metadataForPeer(activePeer).blocked })}
-            >
-              <Ban size={14} />
-              {metadataForPeer(activePeer).blocked ? "取消阻止" : "阻止联系人"}
+            <button class="action-card primary-card contact-save-card" type="button" aria-label="保存联系人资料" on:click={() => onSaveContactMetadata(detailPeer.peer_id)}>
+              <Save size={15} />
+              <span><strong>保存联系人资料</strong><small>写入本机联系人记录</small></span>
             </button>
           </div>
-          <button class="action-card primary-card contact-save-card" type="button" aria-label="保存联系人资料" on:click={() => onSaveContactMetadata(activePeer.peer_id)}>
-            <Save size={15} />
-            <span>
-              <strong>保存联系人资料</strong>
-              <small>写入备注、分组和状态</small>
-            </span>
-          </button>
-        </section>
+        </details>
       {/if}
-      <div class="inspector-action-grid">
-        <button class="action-card" type="button" aria-label="导出聊天记录" on:click={onExportConversation}>
-          <Download size={15} />
-          <span>
-            <strong>导出聊天记录</strong>
-            <small>保存当前会话</small>
-          </span>
-        </button>
-        <button class="action-card" type="button" aria-label="复制会话诊断" on:click={() => onCopyIdentityValue(conversationDiagnosticReport(), "会话诊断报告")}>
-          <Copy size={15} />
-          <span>
-            <strong>复制会话诊断</strong>
-            <small>连接与传输信息</small>
-          </span>
-        </button>
-      </div>
-      {#if conversation}
-        <div class="detail-actions">
-          <button class="row-action" type="button" on:click={onTogglePin}>
-            {#if conversation.pinned}<PinOff size={14} />取消置顶{:else}<Pin size={14} />置顶{/if}
+      {#if !profileMode}
+      <details class="inspector-disclosure conversation-management">
+        <summary><span><strong>会话管理</strong><small>置顶、免扰与记录</small></span></summary>
+        <div class="inspector-disclosure-body">
+          <button class="action-card" type="button" aria-label="导出聊天记录" on:click={onExportConversation}>
+            <Download size={15} />
+            <span><strong>导出聊天记录</strong><small>保存当前会话</small></span>
           </button>
-          <button class="row-action" type="button" on:click={onToggleMute}>
-            {#if conversation.muted}<Volume2 size={14} />取消免扰{:else}<BellOff size={14} />免打扰{/if}
-          </button>
-          <button class="row-action" type="button" on:click={onToggleArchive}>
-            <Archive size={14} />
-            {conversation.archived ? "取消归档" : "归档"}
-          </button>
-          <button class="row-action danger" type="button" on:click={onClearConversationMessages}>
-            <Trash2 size={14} />
-            清空聊天记录
-          </button>
-          <button class="row-action danger" type="button" on:click={onDeleteConversation}>
-            <Trash2 size={14} />
-            删除
-          </button>
+          {#if conversation}
+            <div class="detail-actions">
+              <button class="row-action" type="button" on:click={onTogglePin}>
+                {#if conversation.pinned}<PinOff size={14} />取消置顶{:else}<Pin size={14} />置顶{/if}
+              </button>
+              <button class="row-action" type="button" on:click={onToggleMute}>
+                {#if conversation.muted}<Volume2 size={14} />取消免扰{:else}<BellOff size={14} />免打扰{/if}
+              </button>
+              <button class="row-action" type="button" on:click={onToggleArchive}>
+                <Archive size={14} />{conversation.archived ? "取消归档" : "归档"}
+              </button>
+              <button class="row-action danger" type="button" on:click={onClearConversationMessages}>
+                <Trash2 size={14} />清空聊天记录
+              </button>
+              <button class="row-action danger" type="button" on:click={onDeleteConversation}>
+                <Trash2 size={14} />删除会话
+              </button>
+            </div>
+          {/if}
         </div>
-      {/if}
+      </details>
+      <details class="inspector-disclosure conversation-assets">
+        <summary><span><strong>聊天文件</strong><small>{recentConversationImages.length + recentConversationDocuments.length} 项</small></span></summary>
+        <div class="inspector-disclosure-body asset-disclosure-body">
       <section class="shared-files-card shared-images-card" aria-label="会话图片">
         <header>
           <div>
@@ -842,8 +779,11 @@
           {/each}
         </div>
       </section>
+        </div>
+      </details>
       {#if statusText.startsWith("已清空 ")}
         <p class="hint">{statusText}</p>
+      {/if}
       {/if}
     </section>
   {:else if visibleTab === "transfers"}
@@ -856,6 +796,16 @@
             <span>
               <strong>{task.name}</strong>
               <small><span class={`transfer-status-badge ${transferStatusTone(task)}`}>{transferStatusLabel(task)}</span> · {formatBytes(task.sentBytes)} / {formatBytes(task.totalBytes)}</small>
+              <span
+                class="inspector-transfer-progress"
+                role="progressbar"
+                aria-label={`${task.name} 传输进度`}
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow={transferProgress(task)}
+              >
+                <span style={`width: ${transferProgress(task)}%`}></span>
+              </span>
               {#if task.errorMessage}
                 <small class="transfer-error">失败原因：{task.errorMessage}</small>
               {/if}
@@ -901,13 +851,6 @@
         <span>默认发现</span>
         <strong>{settings.auto_discovery && settings.multicast ? "运行中" : "受限"}</strong>
       </div>
-      <button class="action-card inspector-single-action" type="button" aria-label="复制网络诊断报告" on:click={() => onCopyNetworkDiagnostics(networkDiagnosticReport())}>
-        <Copy size={15} />
-        <span>
-          <strong>复制网络诊断报告</strong>
-          <small>发现、端口和告警</small>
-        </span>
-      </button>
       {#if networkInputWarning}
         <p class="warning">{networkInputWarning}</p>
       {/if}
@@ -1002,13 +945,6 @@
               <small>重新读取占用</small>
             </span>
           </button>
-          <button class="action-card" type="button" aria-label="复制存储诊断报告" on:click={() => onCopyStorageDiagnostics(storageDiagnosticReport())}>
-            <Copy size={15} />
-            <span>
-              <strong>复制存储诊断报告</strong>
-              <small>路径与数据库状态</small>
-            </span>
-          </button>
           <button class="action-card" type="button" aria-label="打开数据目录" on:click={() => onOpenStorage("data")}>
             <HardDrive size={15} />
             <span>
@@ -1085,6 +1021,62 @@
     </section>
   {/if}
 </aside>
+
+{#if announcementDialogOpen}
+  <div
+    class="group-announcement-dialog-backdrop"
+    role="presentation"
+    on:click={(event) => {
+      if (event.target === event.currentTarget) closeAnnouncementEditor();
+    }}
+  >
+    <form
+      class="group-announcement-dialog"
+      aria-label="编辑群公告"
+      on:submit|preventDefault={saveAnnouncementEditor}
+    >
+      <header>
+        <div>
+          <strong>群公告</strong>
+          <span>发布后将同步给所有群成员</span>
+        </div>
+        <button class="icon-action" type="button" aria-label="关闭群公告编辑" on:click={closeAnnouncementEditor}><X size={16} /></button>
+      </header>
+      <label class="group-announcement-editor-field">
+        <span>公告内容</span>
+        <textarea
+          aria-label="群公告内容"
+          rows="7"
+          maxlength="500"
+          placeholder="填写群内通知、值班安排或重要约定"
+          value={announcementEditorValue}
+          on:input={(event) => (announcementEditorValue = (event.currentTarget as HTMLTextAreaElement).value)}
+        ></textarea>
+        <small>{announcementEditorValue.length} / 500</small>
+      </label>
+      <label class="group-announcement-pin-toggle">
+        <span>
+          <strong>置顶到聊天顶部</strong>
+          <small>关闭后仍可在群资料中查看</small>
+        </span>
+        <input
+          type="checkbox"
+          role="switch"
+          aria-label="置顶群公告"
+          checked={announcementPinnedEditor}
+          disabled={!announcementEditorValue.trim()}
+          on:change={(event) => (announcementPinnedEditor = (event.currentTarget as HTMLInputElement).checked)}
+        />
+      </label>
+      <footer>
+        <button type="button" on:click={closeAnnouncementEditor}>取消</button>
+        <button class="primary" type="submit" disabled={announcementSaving}>
+          {#if announcementSaving}保存中{:else}发布公告{/if}
+        </button>
+      </footer>
+    </form>
+  </div>
+{/if}
 
 {#if sharedImagePreview}
   <div class="image-preview-backdrop inspector-image-preview" role="presentation" on:click={closeSharedImagePreview}>

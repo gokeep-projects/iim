@@ -2,6 +2,7 @@
   import Ban from "lucide-svelte/icons/ban";
   import Bell from "lucide-svelte/icons/bell";
   import CheckSquare from "lucide-svelte/icons/check-square";
+  import ChevronDown from "lucide-svelte/icons/chevron-down";
   import Copy from "lucide-svelte/icons/copy";
   import Database from "lucide-svelte/icons/database";
   import HardDrive from "lucide-svelte/icons/hard-drive";
@@ -15,16 +16,15 @@
   import Search from "lucide-svelte/icons/search";
   import ShieldCheck from "lucide-svelte/icons/shield-check";
   import Scissors from "lucide-svelte/icons/scissors";
-  import Square from "lucide-svelte/icons/square";
-  import Star from "lucide-svelte/icons/star";
   import Trash2 from "lucide-svelte/icons/trash-2";
   import UploadCloud from "lucide-svelte/icons/upload-cloud";
   import Users from "lucide-svelte/icons/users";
+  import X from "lucide-svelte/icons/x";
+  import UserAvatar from "./UserAvatar.svelte";
   import {
     defaultAppShortcuts,
     defaultTransportConfig,
     type AppShortcuts,
-    type ChatMessage,
     type ContactMetadata,
     type NetworkSettings,
     type PeerProfile,
@@ -43,19 +43,21 @@
   type SettingsTab = "profile" | "network" | "storage" | "security" | "preferences";
   type TransferStatusFilter = "all" | "active" | "failed" | "done";
   type ContactFilter = "all" | "online" | "favorite" | "blocked";
+  type SecurityDeviceItem = {
+    peerId: string;
+    peer: PeerProfile | null;
+    trusted: TrustedPeer | null;
+    label: string;
+    hostname: string;
+    ip: string;
+    fingerprint: string;
+  };
 
   export let section: Section = "contacts";
   export let peers: PeerProfile[] = [];
   export let self: PeerProfile | null = null;
   export let focusedContactPeerId = "";
   export let contactMetadata: Record<string, ContactMetadata> = {};
-  export let selectedPeerIds: string[] = [];
-  export let searchResults: ChatMessage[] = [];
-  export let favoriteMessages: ChatMessage[] = [];
-  export let todoMessages: ChatMessage[] = [];
-  export let outboxMessages: ChatMessage[] = [];
-  export let conversationTitles: Record<string, string> = {};
-  export let query = "";
   export let settings: NetworkSettings;
   export let transportConfig: TransportConfig = defaultTransportConfig;
   export let transferTasks: TransferTask[] = [];
@@ -75,10 +77,12 @@
   export let loginPasswordReady = true;
   export let profileSignature = "";
   export let avatarLabel = "";
+  export let avatarImage = "";
   export let requireContactForMessaging = false;
   export let statusText = "";
   export let trustStatus = "";
   export let trayStatus = "";
+  export let refreshingPeers = false;
   export let networkInputWarning = "";
   export let networkWarnings: string[] = [];
   export let storageOverview: StorageOverview | null = null;
@@ -86,22 +90,16 @@
   export let storageMigrationActive = false;
   export let trustedPeers: TrustedPeer[] = [];
   export let settingsTab: SettingsTab = "profile";
-  export let onTogglePeer: (peerId: string) => void = () => {};
   export let onSelectConversation: (id: string) => void | Promise<void> = () => {};
-  export let onOpenMessageResult: (message: ChatMessage) => void | Promise<void> = () => {};
-  export let onMessageContext: (message: ChatMessage, event: MouseEvent) => void = () => {};
-  export let onRetryOutboxMessages: () => void | Promise<void> = () => {};
   export let onCreateGroup: () => void | Promise<void> = () => {};
-  export let onRefreshPeers: () => void | Promise<void> = () => {};
-  export let onSearch: () => void | Promise<void> = () => {};
-  export let onRefreshFavorites: () => void | Promise<void> = () => {};
-  export let onCopyNetworkDiagnostics: (report: string) => void | Promise<void> = () => {};
+  export let onRefreshPeers: () => boolean | void | Promise<boolean | void> = () => {};
   export let onTrustPeer: (peer?: PeerProfile | null) => void | Promise<void> = () => {};
+  export let onRefreshTrustedPeers: () => void | Promise<void> = () => {};
   export let onRemoveTrustedPeer: (peerId: string) => void | Promise<void> = () => {};
   export let onProfileNameChange: (value: string) => void = () => {};
   export let onProfileHostnameChange: (value: string) => void = () => {};
   export let onProfileStatusChange: (value: PeerStatus) => void = () => {};
-  export let onSaveProfile: () => void | Promise<void> = () => {};
+  export let onSaveProfile: () => boolean | void | Promise<boolean | void> = () => {};
   export let onCopyIdentityValue: (value: string, label: string) => void | Promise<void> = () => {};
   export let onEnableNotifications: () => void | Promise<void> = () => {};
   export let onMinimizeToTray: () => void | Promise<void> = () => {};
@@ -119,14 +117,13 @@
   export let onSaveLoginSettings: () => void | Promise<void> = () => {};
   export let onProfileSignatureChange: (value: string) => void = () => {};
   export let onAvatarLabelChange: (value: string) => void = () => {};
-  export let onSaveProfileExtras: () => void | Promise<void> = () => {};
+  export let onAvatarImageChange: (value: string) => void = () => {};
+  export let onSaveProfileExtras: () => boolean | void | Promise<boolean | void> = () => {};
   export let onRefreshStorage: () => void | Promise<void> = () => {};
   export let onMigrateStorageDirectory: () => void | Promise<void> = () => {};
   export let onClearStagedFiles: () => void | Promise<void> = () => {};
   export let onOpenStorage: (kind: "data" | "received" | "staged") => void | Promise<void> = () => {};
   export let onCopyStoragePath: (path: string, label: string) => void | Promise<void> = () => {};
-  export let onCopyStorageDiagnostics: (report: string) => void | Promise<void> = () => {};
-  export let onCopyTrustedFingerprint: (fingerprint: string, label: string) => void | Promise<void> = () => {};
   export let onOpenTransfer: (transferId: string) => void | Promise<void> = () => {};
   export let onDeleteTransfer: (transferId: string) => void | Promise<void> = () => {};
   export let onCancelTransfer: (transferId: string) => void | Promise<void> = () => {};
@@ -141,11 +138,24 @@
 
   let focusedContactId = "";
   let contactFilter: ContactFilter = "all";
+  let contactQuery = "";
+  let visibleContactLimit = 40;
+  const contactPageSize = 40;
   let transferQuery = "";
   let transferStatusFilter: TransferStatusFilter = "all";
-  let trustedDeviceQuery = "";
+  let visibleTransferLimit = 24;
+  const transferPageSize = 24;
+  let securityDeviceQuery = "";
+  let visibleSecurityDeviceLimit = 25;
+  const securityDevicePageSize = 25;
   let networkDiagnosticsRefreshing = false;
   let storageRefreshing = false;
+  let avatarFileInput: HTMLInputElement | null = null;
+  let avatarSourceImage = "";
+  let avatarCropPreview = "";
+  let avatarCropZoom = 1;
+  let avatarCropX = 50;
+  let avatarCropY = 50;
 
   const settingsTabs: Array<{ id: SettingsTab; label: string; icon: typeof Users }> = [
     { id: "profile", label: "个人", icon: Users },
@@ -197,6 +207,103 @@
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  function readImageFile(file: File) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error ?? new Error("头像图片读取失败"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function loadImage(src: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("头像图片加载失败"));
+      image.src = src;
+    });
+  }
+
+  async function renderAvatarCrop() {
+    if (!avatarSourceImage) return;
+    const image = await loadImage(avatarSourceImage);
+    const canvas = document.createElement("canvas");
+    const size = 160;
+    canvas.width = size;
+    canvas.height = size;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const zoom = Math.max(1, Math.min(3, avatarCropZoom));
+    const sourceSize = Math.max(1, Math.min(image.naturalWidth, image.naturalHeight) / zoom);
+    const maxX = Math.max(0, image.naturalWidth - sourceSize);
+    const maxY = Math.max(0, image.naturalHeight - sourceSize);
+    context.clearRect(0, 0, size, size);
+    context.drawImage(
+      image,
+      maxX * (avatarCropX / 100),
+      maxY * (avatarCropY / 100),
+      sourceSize,
+      sourceSize,
+      0,
+      0,
+      size,
+      size
+    );
+    avatarCropPreview = canvas.toDataURL("image/png");
+  }
+
+  async function chooseAvatarFile(files: FileList | null) {
+    const file = files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    avatarSourceImage = await readImageFile(file);
+    avatarCropZoom = 1;
+    avatarCropX = 50;
+    avatarCropY = 50;
+    avatarCropPreview = "";
+    await renderAvatarCrop();
+  }
+
+  function updateAvatarCrop(kind: "zoom" | "x" | "y", value: string) {
+    const next = Number(value);
+    if (!Number.isFinite(next)) return;
+    if (kind === "zoom") avatarCropZoom = next;
+    if (kind === "x") avatarCropX = next;
+    if (kind === "y") avatarCropY = next;
+    void renderAvatarCrop();
+  }
+
+  function clearAvatarImage() {
+    avatarSourceImage = "";
+    avatarCropPreview = "";
+    if (avatarFileInput) avatarFileInput.value = "";
+    onAvatarImageChange("");
+  }
+
+  function closeAvatarCrop() {
+    avatarSourceImage = "";
+    avatarCropPreview = "";
+    if (avatarFileInput) avatarFileInput.value = "";
+  }
+
+  function applyAvatarCrop() {
+    if (!avatarCropPreview) return;
+    onAvatarImageChange(avatarCropPreview);
+    closeAvatarCrop();
+  }
+
+  function handleAvatarCropKeydown(event: KeyboardEvent) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeAvatarCrop();
+  }
+
+  async function savePersonalProfile() {
+    const profileSaved = await onSaveProfile();
+    if (profileSaved === false) return;
+    await onSaveProfileExtras();
   }
 
   function openSettingsCategory(tab: SettingsTab) {
@@ -273,6 +380,16 @@
     return matchesTransferStatusFilter(task, filter) && (!needle || transferSearchText(task).includes(needle));
   }
 
+  function updateTransferQuery(value: string) {
+    transferQuery = value;
+    visibleTransferLimit = transferPageSize;
+  }
+
+  function updateTransferStatusFilter(value: TransferStatusFilter) {
+    transferStatusFilter = value;
+    visibleTransferLimit = transferPageSize;
+  }
+
   function canResumeTransfer(task: TransferTask) {
     return task.resumable;
   }
@@ -302,7 +419,7 @@
 
   function networkDiagnosticReport() {
     return [
-      "灵犀内网通网络诊断",
+      "iim 网络诊断",
       `自动发现：${settings.auto_discovery ? "开启" : "关闭"}`,
       `局域网广播：${settings.multicast ? "开启" : "关闭"}`,
       `发现设备：${discoveredPeerCount}`,
@@ -312,7 +429,7 @@
       `QUIC 监听端口：${transportConfig.listen_port}`,
       `QUIC 心跳：${transportConfig.heartbeat_secs}s`,
       `空闲超时：${transportConfig.max_idle_timeout_secs}s`,
-      `outbox 重试：${Math.round(transportConfig.outbox.retry_after_millis / 1000)}s / ${transportConfig.outbox.max_attempts} 次 / 每批 ${transportConfig.outbox.batch_limit}`,
+      `outbox 重试：${Math.round(transportConfig.outbox.retry_after_millis / 1000)}s / ${Math.min(transportConfig.outbox.max_attempts, 3)} 次 / 每批 ${transportConfig.outbox.batch_limit}`,
       `最近警告：${networkWarnings.join(" | ") || "无"}`,
       `诊断建议：${networkDiagnostics.map((item) => `${item.title} - ${item.detail}`).join(" / ")}`
     ].join("\n");
@@ -327,7 +444,7 @@
       .join(" / ");
 
     return [
-      "灵犀内网通存储诊断",
+      "iim 存储诊断",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `数据目录：${storageOverview?.data_dir ?? "未加载"}`,
       `数据库：${storageOverview?.database_path ?? "未加载"}`,
@@ -359,7 +476,7 @@
       .join("；");
 
     return [
-      "灵犀内网通传输诊断",
+      "iim 传输诊断",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `活跃任务：${activeTasks.length}`,
       `历史任务：${historyTasks.length}`,
@@ -451,14 +568,66 @@
     );
   }
 
-  function trustedPeerSearchText(record: TrustedPeer, peerList = peers) {
-    return [record.peer_id, trustedPeerLabel(record, peerList), record.fingerprint].join(" ").toLowerCase();
+  function endpointIp(endpoint: string) {
+    const value = endpoint.trim();
+    if (!value) return "";
+    if (value.startsWith("[")) return value.slice(1, value.indexOf("]") > 0 ? value.indexOf("]") : undefined);
+    const colonCount = (value.match(/:/g) ?? []).length;
+    return colonCount === 1 ? value.slice(0, value.lastIndexOf(":")) : value;
+  }
+
+  function buildSecurityDevices(peerList: PeerProfile[], trustedList: TrustedPeer[]): SecurityDeviceItem[] {
+    const trustByPeerId = new Map(trustedList.map((record) => [record.peer_id, record]));
+    const items = peerList.map((peer) => ({
+      peerId: peer.peer_id,
+      peer,
+      trusted: trustByPeerId.get(peer.peer_id) ?? null,
+      label: peerLabel(peer),
+      hostname: peer.hostname || "未知主机",
+      ip: endpointIp(peer.endpoints[0] ?? ""),
+      fingerprint: peer.fingerprint
+    }));
+    const discoveredIds = new Set(peerList.map((peer) => peer.peer_id));
+    for (const record of trustedList) {
+      if (discoveredIds.has(record.peer_id)) continue;
+      items.push({
+        peerId: record.peer_id,
+        peer: null,
+        trusted: record,
+        label: trustedPeerLabel(record, peerList),
+        hostname: "当前未发现",
+        ip: "",
+        fingerprint: record.fingerprint
+      });
+    }
+    return items;
+  }
+
+  function securityDeviceSearchText(item: SecurityDeviceItem) {
+    return [item.peerId, item.label, item.hostname, item.ip, item.fingerprint, item.peer?.display_name, item.peer ? metadataFor(item.peer).remark : ""]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  }
+
+  function loadMoreSecurityDevices() {
+    visibleSecurityDeviceLimit = Math.min(filteredSecurityDevices.length, visibleSecurityDeviceLimit + securityDevicePageSize);
+  }
+
+  function handleSecurityListScroll(event: Event) {
+    const element = event.currentTarget as HTMLElement;
+    if (element.scrollTop + element.clientHeight < element.scrollHeight - 40) return;
+    loadMoreSecurityDevices();
+  }
+
+  async function refreshSecurityDevices() {
+    await Promise.all([Promise.resolve(onRefreshPeers()), Promise.resolve(onRefreshTrustedPeers())]);
   }
 
   function trustedPeerAuditReport(record: TrustedPeer, peerList = peers) {
     const peer = peerList.find((item) => item.peer_id === record.peer_id);
     const lines = [
-      "灵犀内网通信任记录",
+      "iim 信任记录",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `设备：${trustedPeerLabel(record, peerList)}`,
       `设备 ID：${record.peer_id}`,
@@ -486,7 +655,7 @@
     const metadata = metadataFor(peer);
     const trusted = trustedPeers.find((record) => record.peer_id === peer.peer_id);
     const lines = [
-      "灵犀内网通联系人记录",
+      "iim 联系人记录",
       `生成时间：${new Date().toLocaleString("zh-CN")}`,
       `显示名：${peer.display_name}`,
       `备注：${metadata.remark || "未设置"}`,
@@ -511,75 +680,6 @@
     return lines.join("\n");
   }
 
-  function securityDiagnosticReport() {
-    const mismatches = trustedPeers.filter((record) => trustedPeerFingerprintMismatch(record));
-    const warnings = networkWarnings.filter(isSecurityWarning);
-    return [
-      "灵犀内网通安全诊断",
-      `生成时间：${new Date().toLocaleString("zh-CN")}`,
-      `通信模式：${requireContactForMessaging ? "仅联系人可通信" : "局域网发现即可通信"}`,
-      `已信任设备：${trustedPeers.length}`,
-      `已发现设备：${peers.length}`,
-      `指纹不一致：${mismatches.length}`,
-      `安全告警：${warnings.length}`,
-      `不一致清单：${mismatches.map((record) => `${trustedPeerLabel(record)} (${record.peer_id})`).join("；") || "无"}`,
-      `最近安全告警：${warnings.join(" | ") || "无"}`,
-      `信任记录：${trustedPeers.map((record) => `${trustedPeerLabel(record)} ${record.peer_id} ${record.fingerprint} ${trustedPeerFingerprintState(record)}`).join("；") || "无"}`
-    ].join("\n");
-  }
-
-  function conversationLabel(conversationId: string) {
-    return conversationTitles[conversationId]?.trim() || conversationId;
-  }
-
-  function fileName(path: string) {
-    return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-  }
-
-  function messageResultPreview(message: ChatMessage) {
-    if (privacyMode) return "消息预览已隐藏";
-    const body = message.body.trim();
-    if (message.recalled) return "消息已撤回";
-    if (body) return body;
-    const transfer = message.attachments.find((attachment) => attachment.type === "transfer");
-    if (!transfer) return "空消息";
-    const files = transfer.manifest.files;
-    if (files.length === 1) return `文件：${fileName(files[0].path)}`;
-    const fileNames = files.slice(0, 3).map((file) => fileName(file.path)).join("、");
-    if (files.length <= 3) return `文件：${fileNames}`;
-    return `文件：${fileNames} 等 ${files.length} 个附件`;
-  }
-
-  function outboxMessageStatusLabel(message: ChatMessage) {
-    if (message.status === "failed") return "发送失败";
-    if (message.status === "sending") return "发送中";
-    if (message.status === "queued") return "待发送";
-    return message.status;
-  }
-
-  function outboxMessageTone(message: ChatMessage) {
-    if (message.status === "failed") return "failed";
-    if (message.status === "queued") return "canceled";
-    return "active";
-  }
-
-  function peerSearchText(peer: PeerProfile) {
-    const metadata = metadataFor(peer);
-    return [
-      peer.peer_id,
-      peer.display_name,
-      peer.hostname,
-      peer.status,
-      peer.endpoints.join(" "),
-      metadata.remark,
-      metadata.group_name,
-      metadata.favorite ? "favorite starred" : "",
-      metadata.blocked ? "blocked hidden 阻止 黑名单" : ""
-    ]
-      .join(" ")
-      .toLowerCase();
-  }
-
   function matchesContactFilter(peer: PeerProfile, filter: ContactFilter) {
     const metadata = metadataFor(peer);
     if (filter === "online") return peer.status === "online" && !metadata.blocked;
@@ -588,8 +688,24 @@
     return true;
   }
 
-  function matchesContactFilters(peer: PeerProfile, needle: string, filter: ContactFilter) {
-    return matchesContactFilter(peer, filter) && (!needle || peerSearchText(peer).includes(needle));
+  function contactSearchText(peer: PeerProfile) {
+    const metadata = metadataFor(peer);
+    return [
+      metadata.remark,
+      peer.display_name,
+      peer.hostname,
+      peer.peer_id,
+      peer.endpoints.join(" "),
+      peer.status === "online" ? "在线 可联系 online" : "离线 暂不可达 offline"
+    ].join(" ").toLocaleLowerCase();
+  }
+
+  function contactListTitle(peer: PeerProfile) {
+    return metadataFor(peer).remark.trim() || peer.hostname || peer.display_name || peer.peer_id;
+  }
+
+  function contactEndpoint(peer: PeerProfile) {
+    return peer.endpoints[0]?.replace(/:\d+$/, "") || "等待 IP";
   }
 
   function openContactContext(peer: PeerProfile, event: MouseEvent) {
@@ -600,7 +716,7 @@
   }
 
   async function refreshNetworkDiagnostics() {
-    if (networkDiagnosticsRefreshing) return;
+    if (networkDiagnosticsRefreshing || refreshingPeers) return;
     networkDiagnosticsRefreshing = true;
     try {
       await Promise.all([
@@ -625,8 +741,8 @@
     }
   }
 
-  $: normalizedQuery = query.trim().toLowerCase();
-  $: visiblePeers = peers.filter((peer) => matchesContactFilters(peer, normalizedQuery, contactFilter)).sort((a, b) => {
+  $: contactNeedle = contactQuery.trim().toLocaleLowerCase();
+  $: filteredPeers = peers.filter((peer) => matchesContactFilter(peer, contactFilter) && (!contactNeedle || contactSearchText(peer).includes(contactNeedle))).sort((a, b) => {
     const aMeta = metadataFor(a);
     const bMeta = metadataFor(b);
     return (
@@ -635,8 +751,13 @@
       peerLabel(a).localeCompare(peerLabel(b), "zh-CN")
     );
   });
-  $: workspaceSection = section === "notifications" ? "settings" : section;
-  $: hasContactFilters = normalizedQuery.length > 0 || contactFilter !== "all";
+  $: visiblePeers = filteredPeers.slice(0, visibleContactLimit);
+  $: workspaceSection = section === "notifications"
+    ? "settings"
+    : section === "files" || section === "settings"
+      ? section
+      : "contacts";
+  $: hasContactFilters = contactFilter !== "all" || Boolean(contactNeedle);
   $: reachablePeers = visiblePeers.filter((peer) => peer.status === "online");
   $: unreachablePeers = visiblePeers.filter((peer) => peer.status !== "online");
   $: if (
@@ -657,7 +778,7 @@
   $: shortSelfFingerprint = selfFingerprint.length > 24 ? `${selfFingerprint.slice(0, 24)}...` : selfFingerprint;
   $: profileDisplayName = profileName.trim() || self?.display_name || "本机用户";
   $: profileHostLabel = profileHostname.trim() || self?.hostname || "等待主机名";
-  $: profileEndpointLabel = self?.endpoints[0] ?? `${transportConfig.listen_port}/QUIC`;
+  $: profileEndpointLabel = endpointIp(self?.endpoints[0] ?? "") || "等待 IP";
   $: trimmedProfileSignature = profileSignature.trim();
   $: profileAvatarSource = avatarLabel.trim() || profileDisplayName.trim();
   $: profileAvatarInitial = Array.from(profileAvatarSource).slice(0, 2).join("") || "我";
@@ -667,12 +788,15 @@
   $: filteredTransferTasks = transferTasks.filter((task) => matchesTransferFilters(task, transferQuery, transferStatusFilter));
   $: filteredActiveTransferTasks = filteredTransferTasks.filter(isActiveTransfer);
   $: filteredHistoryTransferTasks = filteredTransferTasks.filter((task) => !isActiveTransfer(task));
-  $: visibleTransferTasks = [...filteredTransferTasks].sort((a, b) => Number(isActiveTransfer(b)) - Number(isActiveTransfer(a)));
+  $: sortedTransferTasks = [...filteredTransferTasks].sort((a, b) => Number(isActiveTransfer(b)) - Number(isActiveTransfer(a)));
+  $: visibleTransferTasks = sortedTransferTasks.slice(0, visibleTransferLimit);
   $: hasTransferFilters = transferQuery.trim().length > 0 || transferStatusFilter !== "all";
-  $: trustedDeviceNeedle = trustedDeviceQuery.trim().toLowerCase();
-  $: visibleTrustedPeers = trustedDeviceNeedle
-    ? trustedPeers.filter((record) => trustedPeerSearchText(record, peers).includes(trustedDeviceNeedle))
-    : trustedPeers;
+  $: securityDevices = buildSecurityDevices(peers, trustedPeers);
+  $: securityDeviceNeedle = securityDeviceQuery.trim().toLowerCase();
+  $: filteredSecurityDevices = securityDeviceNeedle
+    ? securityDevices.filter((item) => securityDeviceSearchText(item).includes(securityDeviceNeedle))
+    : securityDevices;
+  $: visibleSecurityDevices = filteredSecurityDevices.slice(0, visibleSecurityDeviceLimit);
   $: trustedFingerprintMismatchCount = trustedPeers.filter((record) => trustedPeerFingerprintMismatch(record)).length;
   $: transferFileCount = transferTasks.reduce((sum, task) => sum + task.files.length, 0);
   $: transferTotalBytes = transferTasks.reduce((sum, task) => sum + task.totalBytes, 0);
@@ -710,37 +834,60 @@
   ];
 </script>
 
-<section class="workspace-panel" aria-label="功能工作区">
+<section class:contacts-workspace={workspaceSection === "contacts"} class="workspace-panel" aria-label="功能工作区">
   {#if workspaceSection === "contacts"}
-    <header class="workspace-head">
+    <header class="workspace-head address-book-head">
       <div>
-        <span class="eyebrow">联系人</span>
-        <h1>内网设备</h1>
-        <p>选择成员可创建无服务器群聊；点击联系人进入直连会话。</p>
+        <h1>联系人</h1>
         {#if statusText}
           <p class="hint">{statusText}</p>
         {/if}
       </div>
+      <label class="contacts-search-box">
+        <Search size={15} />
+        <input
+          type="search"
+          aria-label="搜索联系人"
+          autocomplete="off"
+          placeholder="搜索备注、主机名、IP 或状态"
+          value={contactQuery}
+          on:input={(event) => {
+            contactQuery = (event.currentTarget as HTMLInputElement).value;
+            visibleContactLimit = contactPageSize;
+          }}
+        />
+        {#if contactQuery}
+          <button type="button" aria-label="清空联系人搜索" title="清空" on:click={() => (contactQuery = "")}>
+            <X size={14} />
+          </button>
+        {/if}
+      </label>
       <div class="workspace-head-actions">
-        <button class="tool-button" type="button" on:click={onRefreshPeers}>
+        <button
+          class:loading={refreshingPeers}
+          class="icon-button refresh-action"
+          type="button"
+          aria-label="刷新联系人"
+          title="刷新联系人"
+          aria-busy={refreshingPeers}
+          disabled={refreshingPeers}
+          on:click={onRefreshPeers}
+        >
           <RefreshCw size={15} />
-          刷新设备
         </button>
-        <button class="tool-button" type="button" disabled={selectedPeerIds.length === 0} on:click={onCreateGroup}>
+        <button class="icon-button" type="button" aria-label="创建群聊" title="创建群聊" on:click={onCreateGroup}>
           <Users size={15} />
-          创建群聊
         </button>
       </div>
     </header>
-	    <div class:empty={visiblePeers.length === 0} class="contacts-layout">
-	      <div class="contacts-directory">
-	        <div class="contact-directory-summary" aria-label="联系人概览">
-	          <span>发现设备 {visiblePeers.length}</span>
-	          <span>在线 {reachablePeers.length}</span>
-	          <span>已选 {selectedPeerIds.length}</span>
+	    <div class:empty={visiblePeers.length === 0} class="address-book-layout">
+	      <div class="address-directory">
+	        <div class="directory-summary" aria-label="联系人概览">
+	          <span>{visiblePeers.length} 位联系人</span>
+	          <span>{reachablePeers.length} 可联系</span>
 	          {#if hasContactFilters}<span>已筛选</span>{/if}
 	        </div>
-	        <div class="contact-filter-tabs" role="tablist" aria-label="联系人筛选">
+	        <div class="directory-filter" role="tablist" aria-label="联系人筛选">
 	          {#each contactFilters as item}
             <button
               class:active={contactFilter === item.id}
@@ -769,9 +916,16 @@
               {/if}
             </div>
             <div class="empty-panel-actions">
-              <button class="row-action" type="button" on:click={onRefreshPeers}>
+              <button
+                class:loading={refreshingPeers}
+                class="row-action refresh-action"
+                type="button"
+                aria-busy={refreshingPeers}
+                disabled={refreshingPeers}
+                on:click={onRefreshPeers}
+              >
                 <RefreshCw size={13} />
-                刷新
+                {refreshingPeers ? "刷新中" : "刷新"}
               </button>
               <button class="row-action" type="button" on:click={() => onOpenSettingsTab("network")}>
                 <Network size={13} />
@@ -782,203 +936,175 @@
 	        {/if}
 	
 	        {#if visiblePeers.length > 0}
-	          <section class="contact-device-list" aria-label="发现设备列表">
-	            <header class="contact-list-head">
-	              <strong>发现设备</strong>
-	              <span>右键可管理联系人，IP 是直连排查的第一信息。</span>
+	          <section class="directory-list-section" aria-label="发现设备列表">
+	            <header class="directory-list-head">
+	              <strong>{filteredPeers.length} 位联系人</strong>
 	            </header>
-	            <div class="data-grid contacts-grid">
+	            <div class="directory-list" role="list">
 	              {#each visiblePeers as peer (peer.peer_id)}
 	                <article
 	                  class:active={focusedContact?.peer_id === peer.peer_id}
 	                  class:blocked={metadataFor(peer).blocked}
-	                  class="data-row contact-device-card"
+	                  class="directory-contact-row"
+	                  role="listitem"
 	                  on:contextmenu={(event) => openContactContext(peer, event)}
 	                >
-	                  <button
-	                    class="peer-check"
-	                    type="button"
-	                    aria-label={`选择 ${peerLabel(peer)} 加入群聊`}
-	                    title="选择群聊成员"
-	                    disabled={metadataFor(peer).blocked}
-	                    on:click={() => onTogglePeer(peer.peer_id)}
-	                  >
-	                    {#if selectedPeerIds.includes(peer.peer_id)}
-	                      <CheckSquare size={15} />
-	                    {:else}
-	                      <Square size={15} />
-	                    {/if}
-	                  </button>
 	                  <span
-	                    aria-label={peerPresenceLabel(peer)}
 	                    class:online={peer.status === "online"}
 	                    class:offline={peer.status !== "online"}
-	                    class="presence-dot"
+	                    class="directory-contact-avatar"
+	                    aria-label={peerPresenceLabel(peer)}
 	                    title={statusLabel(peer.status)}
-	                  ></span>
-	                  <div class="contact-main">
-	                    <button class="contact-select-summary" type="button" on:click={() => (focusedContactId = peer.peer_id)}>
-	                      <strong>
-	                        {peerLabel(peer)}
-	                        <span class={peer.status === "online" ? "contact-status-chip online" : "contact-status-chip offline"}>{statusLabel(peer)}</span>
-	                      </strong>
+	                  >
+	                    <UserAvatar name={contactListTitle(peer)} seed={peer.peer_id} status={peer.status} size={42} />
+	                  </span>
+	                  <div class="directory-contact-main">
+	                    <button class="directory-contact-select" type="button" on:click={() => (focusedContactId = peer.peer_id)}>
+	                      <strong>{contactListTitle(peer)}</strong>
 	                      <small>
-	                        {#if metadataFor(peer).remark}
-	                          原名 {peer.display_name} ·
+	                        <span>{contactEndpoint(peer)}</span>
+	                        {#if peer.display_name && peer.display_name !== contactListTitle(peer)}
+	                          <span class="contact-secondary-name">{peer.display_name}</span>
 	                        {/if}
-	                        {metadataFor(peer).group_name || "默认"} · {peer.hostname}
 	                        {#if metadataFor(peer).blocked}
 	                          · 已阻止
 	                        {/if}
 	                      </small>
-	                      <small class="contact-endpoint-line">
-	                        <span class="contact-ip-pill">{primaryEndpoint(peer) || "等待端点"}</span>
-	                        {#if peer.endpoints.length > 1}
-	                          <span>{peer.endpoints.length} 个端点</span>
-	                        {/if}
-	                      </small>
 	                    </button>
-	                    <div class="contact-edit-grid">
-	                      <label>
-	                        <span>备注</span>
-	                        <input
-	                          value={metadataFor(peer).remark}
-	                          placeholder={peer.display_name}
-	                          on:input={(event) =>
-	                            onContactMetadataChange(peer.peer_id, { remark: (event.currentTarget as HTMLInputElement).value })}
-	                        />
-	                      </label>
-	                      <label>
-	                        <span>分组</span>
-	                        <input
-	                          value={metadataFor(peer).group_name}
-	                          placeholder="默认"
-	                          on:input={(event) =>
-	                            onContactMetadataChange(peer.peer_id, { group_name: (event.currentTarget as HTMLInputElement).value })}
-	                        />
-	                      </label>
-	                    </div>
 	                  </div>
-	                  <div class="contact-row-actions">
+	                  <div class="directory-contact-actions">
 	                    <button
-	                      class:active={metadataFor(peer).favorite}
-	                      class="icon-toggle"
-	                      type="button"
-	                      title="星标联系人"
-	                      on:click={() => onContactMetadataChange(peer.peer_id, { favorite: !metadataFor(peer).favorite })}
-	                    >
-	                      <Star size={15} />
-	                    </button>
-	                    <button
-	                      class:active={metadataFor(peer).blocked}
-	                      class="icon-toggle danger-toggle"
-	                      type="button"
-	                      title={metadataFor(peer).blocked ? "取消阻止联系人" : "阻止联系人"}
-	                      on:click={() => onContactMetadataChange(peer.peer_id, { blocked: !metadataFor(peer).blocked })}
-	                    >
-	                      <Ban size={15} />
-	                    </button>
-	                    <button class="row-action" type="button" on:click={() => onSaveContactMetadata(peer.peer_id)}>
-	                      <Save size={13} />
-	                      保存
-	                    </button>
-	                    <button
-	                      class="row-action"
+	                      class="directory-message-action"
 	                      type="button"
 	                      aria-label={`和 ${peerLabel(peer)} 聊天`}
+	                      title="发消息"
 	                      disabled={metadataFor(peer).blocked}
 	                      on:click={() => onSelectConversation(`direct:${peer.peer_id}`)}
 	                    >
-	                      <MessageSquareText size={13} />
-	                      聊天
+	                      <MessageSquareText size={15} />
 	                    </button>
 	                  </div>
 	                </article>
 	              {/each}
+	              {#if visiblePeers.length < filteredPeers.length}
+	                <button class="list-load-more directory-load-more" type="button" on:click={() => (visibleContactLimit += contactPageSize)}>
+	                  <ChevronDown size={14} />
+	                  加载更多联系人
+	                </button>
+	              {/if}
 	            </div>
 	          </section>
 	        {/if}
 	      </div>
 
-      <section class="contact-profile-card" aria-label="联系人资料">
+      <section class="contact-detail-pane" aria-label="联系人资料">
         {#if focusedContact}
           <div class="contact-profile-head">
-            <div class="avatar-mark">{peerLabel(focusedContact).slice(0, 1)}</div>
+            <span
+              class:online={focusedContact.status === "online"}
+              class:offline={focusedContact.status !== "online"}
+              class="contact-profile-avatar"
+              aria-label={peerPresenceLabel(focusedContact)}
+              title={statusLabel(focusedContact.status)}
+            >
+              <UserAvatar name={peerLabel(focusedContact)} seed={focusedContact.peer_id} status={focusedContact.status} size={54} />
+            </span>
             <div>
-              <span class="eyebrow">联系人资料</span>
               <h2>{peerLabel(focusedContact)}</h2>
               <p>{metadataFor(focusedContact).remark ? focusedContact.display_name : focusedContact.hostname}</p>
             </div>
-            <span
-              aria-label={peerPresenceLabel(focusedContact)}
-              class:online={focusedContact.status === "online"}
-              class:offline={focusedContact.status !== "online"}
-              class="presence-dot contact-presence-dot"
-              title={statusLabel(focusedContact.status)}
-            ></span>
           </div>
-          <dl class="contact-profile-meta">
-            <div>
-              <dt>备注</dt>
-              <dd>{metadataFor(focusedContact).remark || "未设置"}</dd>
-            </div>
-            <div>
-              <dt>分组</dt>
-              <dd>{metadataFor(focusedContact).group_name || "默认"}</dd>
-            </div>
-            <div>
-              <dt>安全状态</dt>
-              <dd>{metadataFor(focusedContact).blocked ? "已阻止" : "允许通信"}</dd>
-            </div>
-            <div>
-              <dt>主机名</dt>
-              <dd>{focusedContact.hostname}</dd>
-            </div>
-            <div>
-              <dt>直连端点</dt>
-              <dd class="identity-value-row">
-                <span title={focusedContact.endpoints.join("\n") || "等待发现"}>{focusedContact.endpoints.join("、") || "等待发现"}</span>
-                {#if focusedContact.endpoints.length > 0}
+          <div class="contact-profile-editor" aria-label="编辑联系人资料">
+            <label class="field">
+              <span>备注</span>
+              <input
+                value={metadataFor(focusedContact).remark}
+                placeholder={focusedContact.display_name}
+                on:input={(event) =>
+                  onContactMetadataChange(focusedContact.peer_id, { remark: (event.currentTarget as HTMLInputElement).value })}
+              />
+            </label>
+            <label class="field">
+              <span>分组</span>
+              <input
+                value={metadataFor(focusedContact).group_name}
+                placeholder="默认分组"
+                on:input={(event) =>
+                  onContactMetadataChange(focusedContact.peer_id, { group_name: (event.currentTarget as HTMLInputElement).value })}
+              />
+            </label>
+          </div>
+          <details class="contact-profile-technical">
+            <summary>
+              <span>
+                <strong>设备与安全信息</strong>
+                <small>主机、端点和身份指纹</small>
+              </span>
+            </summary>
+            <dl class="contact-profile-meta">
+              <div>
+                <dt>安全状态</dt>
+                <dd>{metadataFor(focusedContact).blocked ? "已阻止" : "允许通信"}</dd>
+              </div>
+              <div>
+                <dt>主机名</dt>
+                <dd>{focusedContact.hostname}</dd>
+              </div>
+              <div>
+                <dt>IP 地址</dt>
+                <dd class="identity-value-row">
+                  <span>{focusedContact.endpoints.map(endpointIp).filter(Boolean).join("、") || "等待发现"}</span>
+                  {#if focusedContact.endpoints.length > 0}
+                    <button
+                      type="button"
+                      aria-label="复制联系人 IP 地址"
+                      title="复制联系人 IP 地址"
+                      on:click={() => onCopyIdentityValue(focusedContact.endpoints.map(endpointIp).filter(Boolean).join("\n"), "联系人 IP 地址")}
+                    >
+                      <Copy size={13} />
+                    </button>
+                  {/if}
+                </dd>
+              </div>
+              <div>
+                <dt>设备 ID</dt>
+                <dd class="identity-value-row">
+                  <span title={focusedContact.peer_id}>{focusedContact.peer_id}</span>
                   <button
                     type="button"
-                    aria-label="复制联系人直连端点"
-                    title="复制联系人直连端点"
-                    on:click={() => onCopyIdentityValue(focusedContact.endpoints.join("\n"), "联系人直连端点")}
+                    aria-label="复制联系人设备 ID"
+                    title="复制联系人设备 ID"
+                    on:click={() => onCopyIdentityValue(focusedContact.peer_id, "联系人设备 ID")}
                   >
                     <Copy size={13} />
                   </button>
-                {/if}
-              </dd>
-            </div>
-            <div>
-              <dt>设备 ID</dt>
-              <dd class="identity-value-row">
-                <span title={focusedContact.peer_id}>{focusedContact.peer_id}</span>
-                <button
-                  type="button"
-                  aria-label="复制联系人设备 ID"
-                  title="复制联系人设备 ID"
-                  on:click={() => onCopyIdentityValue(focusedContact.peer_id, "联系人设备 ID")}
-                >
-                  <Copy size={13} />
-                </button>
-              </dd>
-            </div>
-            <div>
-              <dt>设备指纹</dt>
-              <dd class="identity-value-row">
-                <span title={focusedContact.fingerprint}>{focusedContact.fingerprint}</span>
-                <button
-                  type="button"
-                  aria-label="复制联系人设备指纹"
-                  title="复制联系人设备指纹"
-                  on:click={() => onCopyIdentityValue(focusedContact.fingerprint, "联系人设备指纹")}
-                >
-                  <Copy size={13} />
-                </button>
-              </dd>
-            </div>
-          </dl>
+                </dd>
+              </div>
+              <div>
+                <dt>设备指纹</dt>
+                <dd class="identity-value-row">
+                  <span title={focusedContact.fingerprint}>{focusedContact.fingerprint}</span>
+                  <button
+                    type="button"
+                    aria-label="复制联系人设备指纹"
+                    title="复制联系人设备指纹"
+                    on:click={() => onCopyIdentityValue(focusedContact.fingerprint, "联系人设备指纹")}
+                  >
+                    <Copy size={13} />
+                  </button>
+                </dd>
+              </div>
+            </dl>
+            <button
+              class="contact-technical-copy"
+              type="button"
+              aria-label="复制设备记录"
+              on:click={() => onCopyIdentityValue(contactAuditReport(focusedContact), `${peerLabel(focusedContact)} 联系人记录`)}
+            >
+              <Copy size={14} />
+              复制设备记录
+            </button>
+          </details>
           <div class="contact-profile-actions">
             <button
               class="contact-primary-action"
@@ -1008,18 +1134,6 @@
                   <small>确认指纹</small>
                 </span>
               </button>
-              <button
-                class="action-card"
-                type="button"
-                aria-label="复制记录"
-                on:click={() => onCopyIdentityValue(contactAuditReport(focusedContact), `${peerLabel(focusedContact)} 联系人记录`)}
-              >
-                <Copy size={15} />
-                <span>
-                  <strong>复制记录</strong>
-                  <small>审计信息</small>
-                </span>
-              </button>
             </div>
             <button
               class:danger={!metadataFor(focusedContact).blocked}
@@ -1041,129 +1155,20 @@
         {/if}
       </section>
     </div>
-  {:else if workspaceSection === "search"}
-    <header class="workspace-head">
-      <div>
-        <span class="eyebrow">全局搜索</span>
-        <h1>搜索结果</h1>
-        <p>查询“{query}”的本地加密历史记录。</p>
-        {#if statusText}
-          <p class="hint">{statusText}</p>
-        {/if}
-      </div>
-      <div class="workspace-head-actions">
-        <button class="tool-button" type="button" on:click={onSearch}>
-          <Search size={15} />
-          重新搜索
-        </button>
-        <button class="tool-button" type="button" on:click={onRefreshFavorites}>
-          <Star size={15} />
-          刷新消息资料
-        </button>
-      </div>
-    </header>
-    <div class="data-grid">
-      {#each searchResults as message (message.id)}
-        <article class="data-row search-result" on:contextmenu={(event) => onMessageContext(message, event)}>
-          <div>
-            <strong>{messageResultPreview(message)}</strong>
-            <small>{conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}</small>
-          </div>
-          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
-            <MessageSquareText size={13} />
-            打开
-          </button>
-        </article>
-      {:else}
-        <p class="empty-note">没有搜索结果。输入关键词后按 Enter 或点击搜索。</p>
-      {/each}
-    </div>
-    <div class="section-subhead">
-      <strong>收藏消息</strong>
-      <small>{favoriteMessages.length}</small>
-    </div>
-    <div class="data-grid">
-      {#each favoriteMessages as message (message.id)}
-        <article class="data-row search-result" on:contextmenu={(event) => onMessageContext(message, event)}>
-          <Star size={15} />
-          <div>
-            <strong>{messageResultPreview(message)}</strong>
-            <small>{conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}</small>
-          </div>
-          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
-            <MessageSquareText size={13} />
-            打开
-          </button>
-        </article>
-      {:else}
-        <p class="empty-note">暂无收藏消息。可在聊天消息上右键选择“收藏消息”。</p>
-      {/each}
-    </div>
-    <div class="section-subhead">
-      <strong>消息待办</strong>
-      <small>{todoMessages.length}</small>
-    </div>
-    <div class="data-grid">
-      {#each todoMessages as message (message.id)}
-        <article class="data-row search-result" on:contextmenu={(event) => onMessageContext(message, event)}>
-          <CheckSquare size={15} />
-          <div>
-            <strong>{messageResultPreview(message)}</strong>
-            <small>{conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}</small>
-          </div>
-          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
-            <MessageSquareText size={13} />
-            打开
-          </button>
-        </article>
-      {:else}
-        <p class="empty-note">暂无待办消息。可在聊天消息上右键选择“加入待办”。</p>
-      {/each}
-    </div>
-    <div class="section-subhead">
-      <strong>发件箱</strong>
-      <span class="section-heading-actions">
-        <small>{outboxMessages.length}</small>
-        {#if outboxMessages.length > 0}
-          <button class="section-compact-action" type="button" on:click={onRetryOutboxMessages}>
-            <RefreshCw size={12} />
-            全部重试
-          </button>
-        {/if}
-      </span>
-    </div>
-    <div class="data-grid">
-      {#each outboxMessages as message (message.id)}
-        <article class="data-row search-result" on:contextmenu={(event) => onMessageContext(message, event)}>
-          <UploadCloud size={15} />
-          <div>
-            <strong>{messageResultPreview(message)}</strong>
-            <small>
-              <span class={`transfer-status-badge ${outboxMessageTone(message)}`}>{outboxMessageStatusLabel(message)}</span>
-              · {conversationLabel(message.conversation_id)} · {new Date(message.created_at).toLocaleString("zh-CN")}
-            </small>
-          </div>
-          <button class="row-action" type="button" on:click={() => onOpenMessageResult(message)}>
-            <MessageSquareText size={13} />
-            打开
-          </button>
-        </article>
-      {:else}
-        <p class="empty-note">暂无待发送或发送失败消息。</p>
-      {/each}
-    </div>
   {:else if workspaceSection === "files"}
-    <header class="workspace-head">
+    <header class="workspace-head files-page-head">
       <div>
-        <span class="eyebrow">文件传输</span>
         <h1>传输任务</h1>
-        <p>以历史列表为主，快速检索文件名、任务 ID、状态和失败原因。</p>
         {#if statusText}
           <p class="hint">{statusText}</p>
         {/if}
       </div>
       <div class="workspace-head-actions">
-        <button class="tool-button" type="button" on:click={onClearCompletedTransfers}>
+        <button class="tool-button" type="button" title="打开接收目录" aria-label="打开接收目录" on:click={() => onOpenStorage("received")}>
+          <HardDrive size={15} />
+          接收目录
+        </button>
+        <button class="tool-button" type="button" title="清理已完成任务" aria-label="清理已完成" on:click={onClearCompletedTransfers}>
           <Trash2 size={15} />
           清理已完成
         </button>
@@ -1194,7 +1199,7 @@
           <input
             value={transferQuery}
             placeholder="搜索文件名、任务 ID 或状态"
-            on:input={(event) => (transferQuery = (event.currentTarget as HTMLInputElement).value)}
+            on:input={(event) => updateTransferQuery((event.currentTarget as HTMLInputElement).value)}
           />
         </label>
         <div class="transfer-filter-tabs" role="tablist" aria-label="传输状态筛选">
@@ -1204,7 +1209,7 @@
               type="button"
               role="tab"
               aria-selected={transferStatusFilter === item.id}
-              on:click={() => (transferStatusFilter = item.id)}
+              on:click={() => updateTransferStatusFilter(item.id)}
             >
               {item.label}
             </button>
@@ -1229,7 +1234,7 @@
                   <strong>{task.name}</strong>
                   <span class={`transfer-status-badge ${transferStatusTone(task)}`}>{transferStatusLabel(task)}{isActiveTransfer(task) ? ` · ${transferProgress(task)}%` : ""}</span>
                 </div>
-                <small>{task.files.length} 个文件 · {formatBytes(task.sentBytes)} / {formatBytes(task.totalBytes)} · {task.id}</small>
+                <small title={task.id}>{task.files.length} 个文件 · {formatBytes(task.sentBytes)} / {formatBytes(task.totalBytes)}</small>
                 {#if isActiveTransfer(task)}
                   <div
                     class="transfer-progress"
@@ -1291,6 +1296,7 @@
                   <button class="row-action" type="button" on:click={() => {
                     transferQuery = "";
                     transferStatusFilter = "all";
+                    visibleTransferLimit = transferPageSize;
                   }}>
                     <RefreshCw size={13} />
                     清空筛选
@@ -1299,15 +1305,19 @@
               {/if}
             </div>
           {/each}
+          {#if visibleTransferTasks.length < sortedTransferTasks.length}
+            <button class="list-load-more transfer-load-more" type="button" on:click={() => (visibleTransferLimit += transferPageSize)}>
+              <ChevronDown size={14} />
+              加载更多传输记录
+            </button>
+          {/if}
         </div>
       </section>
     </div>
   {:else}
-    <header class="workspace-head">
+    <header class="workspace-head settings-page-head">
       <div>
-        <span class="eyebrow">设置</span>
-        <h1>工作台配置</h1>
-        <p>集中管理个人资料、网络状态、存储、安全信任、通知与外观。</p>
+        <h1>设置</h1>
       </div>
     </header>
 
@@ -1332,7 +1342,11 @@
         {#if settingsTab === "profile"}
           <section class="settings-profile-hero" aria-label="个人名片">
             <div class="profile-avatar-button" aria-label="头像">
-              <span>{profileAvatarInitial}</span>
+              {#if avatarImage}
+                <img src={avatarImage} alt="当前头像" />
+              {:else}
+                <span>{profileAvatarInitial}</span>
+              {/if}
             </div>
             <div class="profile-hero-copy">
               <span class="eyebrow">本机资料</span>
@@ -1358,6 +1372,79 @@
                   {choice.label}
                 </button>
               {/each}
+            </div>
+          </section>
+          <section class="settings-action-panel profile-editor-panel" aria-label="编辑个人信息">
+            <header>
+              <strong>个人信息</strong>
+              <span>修改头像、显示名称和签名，保存后会随下一次局域网发现同步。</span>
+            </header>
+            <div class="profile-editor-layout">
+              <section class="avatar-editor" aria-label="头像设置">
+                <div class="avatar-preview large">
+                  {#if avatarImage}
+                    <img src={avatarImage} alt="头像裁剪预览" />
+                  {:else}
+                    <span>{profileAvatarInitial}</span>
+                  {/if}
+                </div>
+                <div class="avatar-editor-controls">
+                  <strong>头像</strong>
+                  <small>选择图片后可调整缩放和显示位置。</small>
+                  <input
+                    bind:this={avatarFileInput}
+                    class="visually-hidden"
+                    type="file"
+                    accept="image/*"
+                    aria-label="选择头像图片"
+                    on:change={(event) => void chooseAvatarFile((event.currentTarget as HTMLInputElement).files)}
+                  />
+                  <div class="avatar-editor-actions">
+                    <button class="secondary-action" type="button" on:click={() => avatarFileInput?.click()}>
+                      <UploadCloud size={14} />
+                      上传头像
+                    </button>
+                    <button class="secondary-action" type="button" disabled={!avatarImage} on:click={clearAvatarImage}>
+                      <Trash2 size={14} />
+                      移除图片
+                    </button>
+                  </div>
+                </div>
+              </section>
+              <div class="profile-editor-fields">
+                <label class="field">
+                  <span>显示名称</span>
+                  <input value={profileName} placeholder={self?.display_name ?? "本机用户"} on:input={(event) => onProfileNameChange((event.currentTarget as HTMLInputElement).value)} />
+                </label>
+                <label class="field">
+                  <span>主机备注</span>
+                  <input value={profileHostname} placeholder={self?.hostname ?? "windows-pc"} on:input={(event) => onProfileHostnameChange((event.currentTarget as HTMLInputElement).value)} />
+                </label>
+                <label class="field profile-signature-field">
+                  <span>个人签名</span>
+                  <input
+                    value={profileSignature}
+                    maxlength="80"
+                    placeholder="例如：专注内网直连"
+                    on:input={(event) => onProfileSignatureChange((event.currentTarget as HTMLInputElement).value)}
+                  />
+                </label>
+                <label class="field">
+                  <span>头像文字</span>
+                  <input
+                    value={avatarLabel}
+                    maxlength="2"
+                    placeholder="我"
+                    on:input={(event) => onAvatarLabelChange((event.currentTarget as HTMLInputElement).value)}
+                  />
+                </label>
+              </div>
+            </div>
+            <div class="settings-action-bar">
+              <button class="primary-action settings-primary-action" type="button" on:click={savePersonalProfile}>
+                <Save size={15} />
+                保存个人信息
+              </button>
             </div>
           </section>
           <section class="settings-info-card settings-profile-card" aria-label="设备身份">
@@ -1393,22 +1480,6 @@
               </div>
             </dl>
           </section>
-          <div class="settings-form-grid">
-            <label class="field">
-              <span>显示名称</span>
-              <input value={profileName} placeholder={self?.display_name ?? "本机用户"} on:input={(event) => onProfileNameChange((event.currentTarget as HTMLInputElement).value)} />
-            </label>
-            <label class="field">
-              <span>主机备注</span>
-              <input value={profileHostname} placeholder={self?.hostname ?? "windows-pc"} on:input={(event) => onProfileHostnameChange((event.currentTarget as HTMLInputElement).value)} />
-            </label>
-          </div>
-          <div class="settings-action-bar">
-            <button class="primary-action settings-primary-action" type="button" on:click={onSaveProfile}>
-              <Save size={15} />
-              保存本机资料
-            </button>
-          </div>
         {:else if settingsTab === "network"}
           <section class="settings-info-card" aria-label="网络状态">
             <header>
@@ -1441,7 +1512,7 @@
               </div>
               <div>
                 <dt>最大尝试</dt>
-                <dd>{transportConfig.outbox.max_attempts} 次</dd>
+                <dd>{Math.min(transportConfig.outbox.max_attempts, 3)} 次</dd>
               </div>
               <div>
                 <dt>重试批量</dt>
@@ -1484,20 +1555,17 @@
               </div>
               <div class="settings-header-actions">
 	                <button
-	                  class:loading={networkDiagnosticsRefreshing}
+	                  class:loading={networkDiagnosticsRefreshing || refreshingPeers}
 	                  class="section-compact-action diagnostic-refresh-action"
 	                  type="button"
 	                  aria-label="刷新诊断"
-	                  disabled={networkDiagnosticsRefreshing}
+	                  aria-busy={networkDiagnosticsRefreshing || refreshingPeers}
+	                  disabled={networkDiagnosticsRefreshing || refreshingPeers}
 	                  on:click={refreshNetworkDiagnostics}
 	                >
 	                  <RefreshCw size={12} />
-	                  {networkDiagnosticsRefreshing ? "刷新中" : "刷新诊断"}
+	                  {networkDiagnosticsRefreshing || refreshingPeers ? "刷新中" : "刷新诊断"}
 	                </button>
-                <button class="section-compact-action" type="button" on:click={() => onCopyNetworkDiagnostics(networkDiagnosticReport())}>
-                  <Copy size={12} />
-                  复制诊断报告
-                </button>
               </div>
             </header>
             <div class="diagnostic-list">
@@ -1675,13 +1743,6 @@
 	                  <small>{storageRefreshing ? "正在重新读取本地占用" : "重新读取数据库、缓存和目录占用"}</small>
 	                </span>
 	              </button>
-	              <button class="action-card" type="button" aria-label="复制存储诊断报告" on:click={() => onCopyStorageDiagnostics(storageDiagnosticReport())}>
-	                <Copy size={16} />
-	                <span>
-	                  <strong>复制存储诊断报告</strong>
-                  <small>用于排查加密库和文件缓存</small>
-                </span>
-              </button>
             </div>
           </section>
           <section class="settings-danger-zone" aria-label="危险操作">
@@ -1737,12 +1798,13 @@
                 <small>{trustedFingerprintMismatchCount > 0 ? "发现设备与信任记录不一致" : "未发现证书替换风险"}</small>
               </article>
             </div>
-            <div class="security-policy-options" role="group" aria-label="通信权限策略">
+            <div class="security-policy-options" role="radiogroup" aria-label="通信权限策略">
               <button
                 class:active={!requireContactForMessaging}
                 type="button"
+                role="radio"
                 aria-label="无需加好友"
-	                aria-pressed={!requireContactForMessaging}
+	                aria-checked={!requireContactForMessaging}
 	                on:click={() => onToggleRequireContactForMessaging(false)}
 	              >
 	                <ShieldCheck size={16} />
@@ -1752,11 +1814,12 @@
 	                </span>
 	              </button>
 	              <button
-	                class:active={requireContactForMessaging}
-	                type="button"
-	                aria-label="仅联系人可通信"
-	                aria-pressed={requireContactForMessaging}
-	                on:click={() => onToggleRequireContactForMessaging(true)}
+                class:active={requireContactForMessaging}
+                type="button"
+                role="radio"
+                aria-label="仅联系人可通信"
+	                aria-checked={requireContactForMessaging}
+                on:click={() => onToggleRequireContactForMessaging(true)}
 	              >
 	                <Users size={16} />
 	                <span>
@@ -1780,11 +1843,7 @@
 	                <strong>设备指纹信任</strong>
 	                <span>用于 TOFU 指纹锁定，避免同一设备 ID 被证书替换。</span>
 	              </div>
-	              <button class="section-compact-action" type="button" on:click={() => onCopyIdentityValue(securityDiagnosticReport(), "安全诊断报告")}>
-	                <Copy size={12} />
-                复制诊断报告
-              </button>
-            </header>
+	            </header>
             <dl>
               <div>
                 <dt>已发现</dt>
@@ -1800,148 +1859,99 @@
 	              </div>
 	            </dl>
 	          </section>
-	          <section class="trusted-device-section discovered-trust-section" aria-label="发现设备指纹">
+	          <section class="trusted-device-section security-device-section" aria-label="设备指纹">
 	            <header>
 	              <div>
-	                <strong>发现设备指纹</strong>
-	                <span>可手动确认设备指纹；添加联系人时也会自动建立信任。</span>
+	                <strong>设备指纹</strong>
+	                <span>发现状态与信任状态合并显示，滚动到底加载更多。</span>
 	              </div>
-	              <span>{peers.length} 台</span>
+	              <div class="security-section-meta">
+	                <span>{visibleSecurityDevices.length} / {filteredSecurityDevices.length} 台 · 已信任 {trustedPeers.length}</span>
+	                <button class="icon-button" type="button" aria-label="刷新设备指纹" title="刷新" on:click={refreshSecurityDevices}>
+	                  <RefreshCw size={14} />
+	                </button>
+	              </div>
 	            </header>
-	            <div class="data-grid compact">
-	              {#each peers as peer (peer.peer_id)}
-	                <article class="data-row security-row">
+	            <label class="search-box security-device-search">
+	              <Search size={15} />
+	              <input
+	                value={securityDeviceQuery}
+	                aria-label="搜索设备指纹"
+	                placeholder="搜索名称、主机、IP、设备 ID 或指纹"
+	                on:input={(event) => {
+	                  securityDeviceQuery = (event.currentTarget as HTMLInputElement).value;
+	                  visibleSecurityDeviceLimit = securityDevicePageSize;
+	                }}
+	              />
+	              {#if securityDeviceQuery}
+	                <button type="button" aria-label="清空设备指纹搜索" title="清空" on:click={() => {
+	                  securityDeviceQuery = "";
+	                  visibleSecurityDeviceLimit = securityDevicePageSize;
+	                }}><X size={13} /></button>
+	              {/if}
+	            </label>
+	            <div class="data-grid compact security-scroll-list" aria-label="设备指纹列表" on:scroll={handleSecurityListScroll}>
+	              {#each visibleSecurityDevices as item (item.peerId)}
+	                <article class:trusted={Boolean(item.trusted)} class:mismatch={Boolean(item.trusted && item.peer && item.trusted.fingerprint !== item.peer.fingerprint)} class="data-row security-row unified-security-row">
 	                  <ShieldCheck size={16} />
 	                  <div>
-	                    <strong>{peer.display_name}</strong>
-	                    <small>{peer.fingerprint}</small>
+	                    <strong>{item.label}</strong>
+	                    <small>{item.hostname}{item.ip ? ` · ${item.ip}` : ""}</small>
+	                    <small title={item.fingerprint}>{item.fingerprint}</small>
 	                  </div>
-	                  <button class="section-compact-action" type="button" on:click={() => onTrustPeer(peer)}>
-	                    <ShieldCheck size={12} />
-	                    信任
-	                  </button>
+	                  <div class="unified-security-actions">
+	                    <span class:danger={Boolean(item.trusted && item.peer && item.trusted.fingerprint !== item.peer.fingerprint)} class="security-trust-state">
+	                      {item.trusted
+	                        ? item.peer && item.trusted.fingerprint !== item.peer.fingerprint ? "指纹异常" : "已信任"
+	                        : "未信任"}
+	                    </span>
+	                    {#if item.trusted}
+	                      <button class="icon-button danger" type="button" aria-label={`移除 ${item.label} 信任`} title="移除信任" on:click={() => onRemoveTrustedPeer(item.peerId)}>
+	                        <Trash2 size={14} />
+	                      </button>
+	                    {:else if item.peer}
+	                      <button class="section-compact-action" type="button" on:click={() => onTrustPeer(item.peer)}>
+	                        <ShieldCheck size={12} />
+	                        信任
+	                      </button>
+	                    {/if}
+	                  </div>
 	                </article>
+	              {:else}
+	                <p class="empty-note compact">{securityDeviceNeedle ? "没有匹配的设备。" : "暂无发现或已信任设备。"}</p>
 	              {/each}
+	              {#if visibleSecurityDevices.length < filteredSecurityDevices.length}
+	                <button class="security-load-more" type="button" on:click={loadMoreSecurityDevices}>
+	                  <ChevronDown size={14} />
+	                  继续加载 {Math.min(securityDevicePageSize, filteredSecurityDevices.length - visibleSecurityDevices.length)} 台
+	                </button>
+	              {/if}
 	            </div>
 	          </section>
-	          <section class="trusted-device-section" aria-label="已信任设备">
-	            <header>
-	              <div>
-	                <strong>已信任设备</strong>
-	                <span>只记录设备 ID 与指纹，不决定默认是否允许内网通信。</span>
-	              </div>
-              <span>{visibleTrustedPeers.length} / {trustedPeers.length} 台</span>
-            </header>
-            <label class="search-box trusted-device-search">
-              <Search size={15} />
-              <input
-                value={trustedDeviceQuery}
-                placeholder="搜索设备 ID 或指纹"
-                on:input={(event) => (trustedDeviceQuery = (event.currentTarget as HTMLInputElement).value)}
-              />
-            </label>
-            <div class="data-grid compact">
-              {#each visibleTrustedPeers as record (record.peer_id)}
-                <article class="data-row security-row trusted-device-row">
-                  <ShieldCheck size={16} />
-                  <div>
-                    <strong>{trustedPeerLabel(record)}</strong>
-                    <small title={record.fingerprint}>{record.fingerprint}</small>
-                    <small>信任时间 {formatTrustTime(record.trusted_at)}</small>
-                    <small class:trust-warning={trustedPeerFingerprintMismatch(record)}>{trustedPeerFingerprintState(record)}</small>
-                  </div>
-                  <div class="trusted-device-actions">
-                    <button
-                      class="trusted-action"
-                      type="button"
-                      aria-label={`复制 ${trustedPeerLabel(record)} 指纹`}
-                      on:click={() => onCopyTrustedFingerprint(record.fingerprint, `${trustedPeerLabel(record)} 指纹`)}
-                    >
-                      <Copy size={12} />
-                      复制指纹
-                    </button>
-                    <button
-                      class="trusted-action"
-                      type="button"
-                      aria-label={`复制 ${trustedPeerLabel(record)} 信任记录`}
-                      on:click={() => onCopyIdentityValue(trustedPeerAuditReport(record), `${trustedPeerLabel(record)} 信任记录`)}
-                    >
-                      <Copy size={12} />
-                      复制记录
-                    </button>
-                    <button class="trusted-action danger" type="button" on:click={() => onRemoveTrustedPeer(record.peer_id)}>
-                      <Trash2 size={12} />
-                      移除信任
-                    </button>
-                  </div>
-                </article>
-              {:else}
-                <p class="empty-note compact">
-                  {trustedDeviceNeedle ? "没有匹配的已信任设备。" : "暂无已信任设备。首次发现联系人时会自动建立 TOFU 信任。"}
-                </p>
-              {/each}
-            </div>
-          </section>
           {#if trustStatus}
             <p class="hint">{trustStatus}</p>
           {/if}
         {:else}
-          <section class="preference-dashboard" aria-label="偏好概览">
-            <header>
-              <Palette size={16} />
-              <div>
-                <strong>工作台偏好</strong>
-                <span>通知、隐私、窗口、登录和快捷键都集中在这里配置。</span>
-              </div>
-            </header>
-            <div class="preference-status-grid">
-              <article class={notificationReady ? "ok" : "warning"}>
-                <Bell size={16} />
-                <span>系统通知</span>
-                <strong>{notificationReady ? "已开启" : "未授权"}</strong>
-                <small>{notificationReady ? "新消息会触发桌面提醒" : "点击下方按钮开启提醒"}</small>
-              </article>
-              <article class={privacyMode ? "ok" : "neutral"}>
-                <ShieldCheck size={16} />
-                <span>隐私保护</span>
-                <strong>{privacyMode ? "保护中" : "标准模式"}</strong>
-                <small>{privacyMode ? "通知内容自动隐藏" : showNotificationPreview ? "通知显示消息摘要" : "通知隐藏消息摘要"}</small>
-              </article>
-              <article class={closeToTray ? "ok" : "neutral"}>
-                <Minimize2 size={16} />
-                <span>窗口行为</span>
-                <strong>{closeToTray ? "常驻托盘" : "直接关闭"}</strong>
-                <small>{trayStatus || (closeToTray ? "关闭按钮会隐藏到托盘" : "关闭按钮退出窗口")}</small>
-              </article>
-              <article class="neutral">
-                <Keyboard size={16} />
-                <span>发送快捷键</span>
-                <strong>{sendShortcut === "enter" ? "Enter" : "Ctrl+Enter"}</strong>
-                <small>只保留沟通高频动作</small>
-              </article>
-            </div>
-          </section>
           <section class="settings-action-panel settings-command-panel settings-preference-panel notification-preference-panel" aria-label="提醒与隐私">
-            <header>
-              <strong>提醒与隐私</strong>
-              <span>通知设置已合并到设置页；没有单独通知菜单，避免入口重复。</span>
-            </header>
-            <div class="settings-action-grid">
-              <button class="action-card primary-card" type="button" aria-label={notificationReady ? "重新检查系统通知" : "开启系统通知"} on:click={onEnableNotifications}>
-                <Bell size={16} />
-                <span>
-                  <strong>{notificationReady ? "重新检查通知" : "开启系统通知"}</strong>
-                  <small>{notificationReady ? "重新检查桌面通知权限" : "允许收到新消息和文件提醒"}</small>
-                </span>
+            <header class="settings-panel-heading">
+              <div>
+                <strong>提醒与隐私</strong>
+                <span>{notificationReady ? "系统通知已授权" : "系统通知尚未授权"}</span>
+              </div>
+              <button class="section-compact-action" type="button" aria-label={notificationReady ? "重新检查系统通知" : "开启系统通知"} on:click={onEnableNotifications}>
+                <Bell size={13} />
+                {notificationReady ? "检查通知" : "开启通知"}
               </button>
-              <button class:enabled={showNotificationPreview && !privacyMode} class="preference-toggle" type="button" aria-pressed={showNotificationPreview && !privacyMode} aria-label={privacyMode ? "隐私模式已隐藏通知内容" : showNotificationPreview ? "隐藏通知消息内容" : "显示通知消息内容"} on:click={onToggleNotificationPreview}>
+            </header>
+            <div class="settings-action-grid preference-list">
+              <button class:enabled={showNotificationPreview} class="preference-toggle" type="button" role="switch" aria-checked={showNotificationPreview} aria-label="通知预览" disabled={privacyMode} on:click={onToggleNotificationPreview}>
                 <Bell size={16} />
                 <span>
                   <strong>通知预览</strong>
-                  <small>{privacyMode ? "隐私模式接管" : showNotificationPreview ? "显示消息摘要" : "隐藏消息摘要"}</small>
+                  <small>{privacyMode ? "由隐私模式关闭" : showNotificationPreview ? "显示消息摘要" : "隐藏消息摘要"}</small>
                 </span>
               </button>
-              <button class:enabled={privacyMode} class="preference-toggle" type="button" aria-pressed={privacyMode} aria-label={privacyMode ? "关闭隐私模式" : "开启隐私模式"} on:click={onTogglePrivacyMode}>
+              <button class:enabled={privacyMode} class="preference-toggle" type="button" role="switch" aria-checked={privacyMode} aria-label="隐私模式" on:click={onTogglePrivacyMode}>
                 <ShieldCheck size={16} />
                 <span>
                   <strong>隐私模式</strong>
@@ -1951,30 +1961,29 @@
             </div>
           </section>
           <section class="settings-action-panel settings-command-panel settings-preference-panel window-preference-panel" aria-label="窗口与外观">
-            <header>
-              <strong>窗口与外观</strong>
-              <span>窗口行为和主题放在一起，保留常驻桌面 IM 的核心控制。</span>
+            <header class="settings-panel-heading">
+              <div>
+                <strong>窗口与外观</strong>
+                <span>{closeToTray ? "关闭后继续在托盘运行" : "关闭按钮直接退出窗口"}</span>
+              </div>
+              <button class="section-compact-action" type="button" aria-label="最小化到托盘" on:click={onMinimizeToTray}>
+                <Minimize2 size={13} />
+                最小化
+              </button>
             </header>
-            <div class="settings-action-grid">
-              <button class:enabled={closeToTray} class="preference-toggle" type="button" aria-pressed={closeToTray} aria-label={closeToTray ? "关闭按钮改为关闭窗口" : "关闭按钮隐藏到托盘"} on:click={onToggleCloseToTray}>
+            <div class="settings-action-grid preference-list">
+              <button class:enabled={closeToTray} class="preference-toggle" type="button" role="switch" aria-checked={closeToTray} aria-label="关闭时隐藏到托盘" on:click={onToggleCloseToTray}>
                 <Minimize2 size={16} />
                 <span>
                   <strong>关闭按钮</strong>
                   <small>{closeToTray ? "隐藏到托盘" : "关闭窗口"}</small>
                 </span>
               </button>
-              <button class:enabled={dark} class="preference-toggle" type="button" aria-pressed={dark} aria-label={dark ? "切换浅色主题" : "切换深色主题"} on:click={onToggleTheme}>
+              <button class:enabled={dark} class="preference-toggle" type="button" role="switch" aria-checked={dark} aria-label="深色主题" on:click={onToggleTheme}>
                 <Palette size={16} />
                 <span>
                   <strong>主题</strong>
                   <small>{dark ? "深色工作台" : "浅色工作台"}</small>
-                </span>
-              </button>
-              <button class="action-card" type="button" aria-label="最小化到托盘" on:click={onMinimizeToTray}>
-                <Minimize2 size={16} />
-                <span>
-                  <strong>立即最小化</strong>
-                  <small>保持后台收发和系统通知</small>
                 </span>
               </button>
             </div>
@@ -1985,7 +1994,7 @@
               <span>默认无需登录；启用后，下次启动会先要求输入本机密码。</span>
             </header>
             <div class="login-preference-layout">
-              <button class:enabled={loginEnabled} class="preference-toggle login-toggle" type="button" aria-pressed={loginEnabled} aria-label={loginEnabled ? "关闭登录密码" : "启用登录密码"} on:click={() => onLoginEnabledChange(!loginEnabled)}>
+              <button class:enabled={loginEnabled} class="preference-toggle login-toggle" type="button" role="switch" aria-checked={loginEnabled} aria-label="登录密码" on:click={() => onLoginEnabledChange(!loginEnabled)}>
                 <ShieldCheck size={16} />
                 <span>
                   <strong>登录密码</strong>
@@ -2020,30 +2029,6 @@
                   保存登录设置
                 </button>
               </div>
-            </div>
-            <div class="profile-extra-grid">
-              <label class="field">
-                <span>个人签名</span>
-                <input
-                  value={profileSignature}
-                  maxlength="80"
-                  placeholder="例如：专注内网直连"
-                  on:input={(event) => onProfileSignatureChange((event.currentTarget as HTMLInputElement).value)}
-                />
-              </label>
-              <label class="field">
-                <span>头像文字</span>
-                <input
-                  value={avatarLabel}
-                  maxlength="2"
-                  placeholder="灵"
-                  on:input={(event) => onAvatarLabelChange((event.currentTarget as HTMLInputElement).value)}
-                />
-              </label>
-              <button class="primary-action settings-primary-action" type="button" on:click={onSaveProfileExtras}>
-                <Save size={15} />
-                保存展示资料
-              </button>
             </div>
           </section>
           <section class="settings-action-panel shortcut-settings-panel" aria-label="快捷键设置">
@@ -2122,6 +2107,54 @@
         {#if statusText}
           <p class="hint">{statusText}</p>
         {/if}
+      </div>
+    </div>
+  {/if}
+
+  {#if avatarSourceImage}
+    <div class="modal-backdrop avatar-crop-backdrop" role="presentation" on:click={closeAvatarCrop}>
+      <div
+        class="avatar-crop-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="调整头像"
+        tabindex="-1"
+        on:click|stopPropagation
+        on:keydown={handleAvatarCropKeydown}
+      >
+        <header>
+          <div>
+            <h2>调整头像</h2>
+            <span>移动和缩放图片，选择头像显示范围</span>
+          </div>
+          <button class="icon-button" type="button" title="关闭" aria-label="关闭" on:click={closeAvatarCrop}>
+            <X size={15} />
+          </button>
+        </header>
+        <div class="avatar-crop-content">
+          <div class="avatar-crop-stage" aria-label="头像预览">
+            <img src={avatarCropPreview || avatarSourceImage} alt="待应用头像预览" />
+            <span aria-hidden="true"></span>
+          </div>
+          <div class="avatar-crop-controls" aria-label="头像裁剪范围">
+            <label>
+              <span>缩放</span>
+              <input aria-label="缩放" type="range" min="1" max="3" step="0.05" value={avatarCropZoom} on:input={(event) => updateAvatarCrop("zoom", (event.currentTarget as HTMLInputElement).value)} />
+            </label>
+            <label>
+              <span>左右位置</span>
+              <input aria-label="左右位置" type="range" min="0" max="100" value={avatarCropX} on:input={(event) => updateAvatarCrop("x", (event.currentTarget as HTMLInputElement).value)} />
+            </label>
+            <label>
+              <span>上下位置</span>
+              <input aria-label="上下位置" type="range" min="0" max="100" value={avatarCropY} on:input={(event) => updateAvatarCrop("y", (event.currentTarget as HTMLInputElement).value)} />
+            </label>
+          </div>
+        </div>
+        <footer class="avatar-crop-actions">
+          <button class="row-action" type="button" on:click={closeAvatarCrop}>取消</button>
+          <button class="row-action primary" type="button" disabled={!avatarCropPreview} on:click={applyAvatarCrop}>应用头像</button>
+        </footer>
       </div>
     </div>
   {/if}

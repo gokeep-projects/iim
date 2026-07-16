@@ -56,7 +56,7 @@ pub fn install_system_tray<R: Runtime>(app: &mut App<R>) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("灵犀内网通");
+        .tooltip("iim");
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }

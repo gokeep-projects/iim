@@ -9,4 +9,11 @@ describe("dev server configuration", () => {
     expect(configSource).toContain('host: "127.0.0.1"');
     expect(configSource).toContain('"**/.codegraph/**"');
   });
+
+  it("keeps the full test suite responsive with a bounded worker pool", () => {
+    const configSource = readFileSync(resolve("vite.config.ts"), "utf8");
+
+    expect(configSource).not.toContain("singleFork: true");
+    expect(configSource).toContain("maxForks: 2");
+  });
 });

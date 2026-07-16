@@ -10,8 +10,8 @@
 
 ## Key Learnings
 
-- **Project:** iim-lan-messenger
-- **Description:** 灵犀内网通是一个 Windows 优先的局域网即时通讯客户端，使用 Rust + Tauri 2 + Svelte 5 + TypeScript 开发。目标是提供类似飞秋/企业微信风格的无服务器内网沟通体验：同网段自动发现，复杂网络可配置种子节点和扫描网段，不依赖中间目录或转发服务器。
+- **Project:** iim
+- **Description:** iim 是一个 Windows 优先的局域网即时通讯客户端，使用 Rust + Tauri 2 + Svelte 5 + TypeScript 开发。目标是提供类似飞秋/企业微信风格的无服务器内网沟通体验：同网段自动发现，复杂网络可配置种子节点和扫描网段，不依赖中间目录或转发服务器。
 
 ## Do-Not-Repeat
 

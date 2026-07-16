@@ -129,10 +129,12 @@ function imageMessage(): ChatMessage {
 describe("Inspector tabs", () => {
   it("keeps direct conversation tabs limited to details and files", async () => {
     const tabChange = vi.fn();
+    const close = vi.fn();
     render(Inspector, {
       props: {
         settings,
         onTabChange: tabChange,
+        onClose: close,
       },
     });
 
@@ -142,7 +144,33 @@ describe("Inspector tabs", () => {
     expect(screen.queryByRole("tab", { name: "存储" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "安全" })).not.toBeInTheDocument();
 
+    await fireEvent.click(screen.getByTitle("收起详情"));
+    expect(close).toHaveBeenCalledTimes(1);
     expect(tabChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps the direct details sidebar compact and list-first", () => {
+    const { container } = render(Inspector, {
+      props: {
+        settings,
+        tab: "details",
+        conversation,
+        activePeer: peer(),
+        messages: [message(), imageMessage()],
+      },
+    });
+
+    const inspector = container.querySelector(".inspector");
+    expect(inspector).not.toBeNull();
+    expect(inspector?.querySelector(".inspector-tabs")).not.toBeNull();
+    expect(inspector?.querySelector(".status-card")).not.toBeNull();
+    expect(inspector?.querySelector(".direct-contact-card")).not.toBeNull();
+    expect(inspector?.querySelector(".conversation-management")).not.toBeNull();
+    expect(inspector?.querySelector(".detail-actions")).not.toBeNull();
+    expect(inspector?.querySelector(".conversation-assets")).not.toBeNull();
+    expect(inspector?.querySelector(".shared-image-row")).not.toBeNull();
+    expect(inspector?.querySelector(".shared-file-row")).not.toBeNull();
+    expect(inspector?.querySelectorAll(".shared-files-card").length).toBeGreaterThanOrEqual(2);
   });
 
   it("opens the files tab from a direct conversation", async () => {
@@ -159,7 +187,7 @@ describe("Inspector tabs", () => {
     expect(tabChange).toHaveBeenCalledWith("transfers");
   });
 
-  it("keeps group conversation tabs limited to members and files", async () => {
+  it("separates group profile, members, and files into dedicated tabs", async () => {
     const tabChange = vi.fn();
     render(Inspector, {
       props: {
@@ -169,12 +197,78 @@ describe("Inspector tabs", () => {
       },
     });
 
+    expect(screen.getByRole("tab", { name: "群资料" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "成员" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "文件" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "网络" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "存储" })).not.toBeInTheDocument();
 
     expect(tabChange).not.toHaveBeenCalled();
+  });
+
+  it("lets the group creator publish and pin an announcement from group profile", async () => {
+    const saveAnnouncement = vi.fn().mockResolvedValue(undefined);
+    render(Inspector, {
+      props: {
+        settings,
+        tab: "details",
+        isGroup: true,
+        selfPeerId: "local",
+        canManageGroup: true,
+        conversation: {
+          ...conversation,
+          id: "group:ops",
+          title: "值班群",
+          group_announcement: "旧公告",
+          group_announcement_pinned: false,
+          group_owner_peer_id: "local",
+        },
+        groupNameDraft: "值班群",
+        groupAnnouncementDraft: "旧公告",
+        groupAnnouncementPinnedDraft: false,
+        groupMemberDraftIds: ["peer-a"],
+        peers: [peer()],
+        onSaveGroupAnnouncement: saveAnnouncement,
+      },
+    });
+
+    const announcement = screen.getByLabelText("群公告资料");
+    expect(within(announcement).getByText("旧公告")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "添加成员" })).not.toBeInTheDocument();
+
+    await fireEvent.click(within(announcement).getByRole("button", { name: "编辑群公告" }));
+    const dialog = screen.getByRole("form", { name: "编辑群公告" });
+    const editor = within(dialog).getByRole("textbox", { name: "群公告内容" });
+    await fireEvent.input(editor, { target: { value: "今天 15:00 发布，提前确认回滚方案。" } });
+    await fireEvent.click(within(dialog).getByRole("switch", { name: "置顶群公告" }));
+    await fireEvent.click(within(dialog).getByRole("button", { name: "发布公告" }));
+
+    expect(saveAnnouncement).toHaveBeenCalledWith("今天 15:00 发布，提前确认回滚方案。", true);
+  });
+
+  it("keeps group profile editing unavailable to regular members", () => {
+    render(Inspector, {
+      props: {
+        settings,
+        tab: "details",
+        isGroup: true,
+        selfPeerId: "local",
+        canManageGroup: false,
+        conversation: {
+          ...conversation,
+          id: "group:ops",
+          title: "值班群",
+          group_owner_peer_id: "peer-owner",
+        },
+        groupNameDraft: "值班群",
+        groupMemberDraftIds: ["peer-a"],
+        allPeers: [peer({ peer_id: "peer-owner", display_name: "群主" })],
+      },
+    });
+
+    expect(screen.getByDisplayValue("值班群")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "编辑群公告" })).not.toBeInTheDocument();
+    expect(screen.getByText("群资料仅可由创建者编辑")).toBeInTheDocument();
   });
 
   it("falls back to conversation details when a removed security tab is requested", async () => {
@@ -194,7 +288,7 @@ describe("Inspector tabs", () => {
     expect(copyIdentityValue).not.toHaveBeenCalled();
   });
 
-  it("copies direct conversation peer endpoints from the details tab", async () => {
+  it("copies direct conversation IP addresses without exposing ports", async () => {
     const copyIdentityValue = vi.fn();
     render(Inspector, {
       props: {
@@ -208,18 +302,17 @@ describe("Inspector tabs", () => {
     });
 
     await fireEvent.click(
-      screen.getByRole("button", { name: "复制 Alice 直连端点" }),
+      screen.getByRole("button", { name: "复制 Alice IP 地址" }),
     );
 
     expect(copyIdentityValue).toHaveBeenCalledWith(
-      "192.168.1.42:24251\n10.8.0.42:24251",
-      "Alice 直连端点",
+      "192.168.1.42\n10.8.0.42",
+      "Alice IP 地址",
     );
   });
 
-  it("separates current members from addable contacts in the group editor", async () => {
+  it("opens addable contacts only in the dedicated member dialog", async () => {
     const toggleMember = vi.fn();
-    const announcementChange = vi.fn();
     render(Inspector, {
       props: {
         settings,
@@ -274,24 +367,20 @@ describe("Inspector tabs", () => {
           },
         ],
         onToggleGroupMember: toggleMember,
-        onGroupAnnouncementChange: announcementChange,
       },
     });
 
-    expect(screen.getByText("群公告")).toBeInTheDocument();
-    const announcement = screen.getByLabelText("群公告");
-    expect(announcement).toHaveValue("明天 10:00 发版，先完成回归。");
-    await fireEvent.input(announcement, {
-      target: { value: "今天只同步阻塞问题。" },
-    });
-    expect(announcementChange).toHaveBeenCalledWith("今天只同步阻塞问题。");
+    expect(screen.queryByLabelText("群公告内容")).not.toBeInTheDocument();
 
     const currentMembers = screen.getByRole("group", { name: "当前群成员" });
     expect(within(currentMembers).getByText("我（我）")).toBeInTheDocument();
     expect(within(currentMembers).getByText("研发一号")).toBeInTheDocument();
 
-    const addableContacts = screen.getByRole("group", { name: "可添加联系人" });
-    await fireEvent.click(within(addableContacts).getByTitle("添加 运维二号"));
+    expect(screen.queryByRole("group", { name: "可添加联系人" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "添加成员" }));
+    const dialog = screen.getByRole("dialog", { name: "添加群成员" });
+    expect(within(dialog).getByText("已添加")).toBeInTheDocument();
+    await fireEvent.click(within(dialog).getByRole("button", { name: "添加" }));
 
     expect(toggleMember).toHaveBeenCalledWith("peer-b");
   });
@@ -361,15 +450,14 @@ describe("Inspector tabs", () => {
       },
     });
 
-    expect(screen.getByText("仅创建者可调整成员")).toBeInTheDocument();
-    expect(screen.getAllByText("群主").length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("群公告")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "保存群资料" })).toBeDisabled();
-    await fireEvent.click(screen.getByTitle("从群聊移除 研发一号"));
+    expect(screen.getByText(/仅创建者可管理/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "添加成员" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "保存成员变更" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByTitle("移除 研发一号"));
     expect(toggleMember).not.toHaveBeenCalled();
   });
 
-  it("bulk adds reachable contacts and removes unavailable group members", async () => {
+  it("avoids bulk reachability commands and adds one selected contact", async () => {
     const toggleMember = vi.fn();
     render(Inspector, {
       props: {
@@ -447,17 +535,16 @@ describe("Inspector tabs", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "添加可联系 1" }));
-    await fireEvent.click(screen.getByRole("button", { name: "移除暂不可达 2" }));
-
-    expect(toggleMember.mock.calls.map((call) => call[0])).toEqual([
-      "peer-add-online",
-      "peer-offline",
-      "peer-missing",
-    ]);
+    expect(screen.queryByRole("button", { name: /添加可联系|移除暂不可达/ })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "添加成员" }));
+    const dialog = screen.getByRole("dialog", { name: "添加群成员" });
+    const addButtons = within(dialog).getAllByRole("button", { name: "添加" });
+    await fireEvent.click(addButtons[0]);
+    expect(toggleMember).toHaveBeenCalledTimes(1);
+    expect(["peer-add-online", "peer-add-offline"]).toContain(toggleMember.mock.calls[0][0]);
   });
 
-  it("copies a group conversation diagnostic report from the members sidebar", async () => {
+  it("keeps conversation diagnostics out of the group members sidebar", async () => {
     const copyIdentityValue = vi.fn();
     render(Inspector, {
       props: {
@@ -501,25 +588,8 @@ describe("Inspector tabs", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "复制会话诊断" }));
-
-    expect(copyIdentityValue).toHaveBeenCalledTimes(1);
-    const [report, label] = copyIdentityValue.mock.calls[0];
-    expect(label).toBe("会话诊断报告");
-    expect(report).toContain("灵犀内网通会话诊断");
-    expect(report).toContain("会话：Ops 群");
-    expect(report).toContain("会话 ID：group:ops");
-    expect(report).toContain("类型：群聊");
-    expect(report).toContain("成员 3，可联系 2，暂不可达 1");
-    expect(report).toContain("置顶：是");
-    expect(report).toContain("免打扰：是");
-    expect(report).toContain("消息数量：2");
-    expect(report).toContain("待发送/发送中消息：1");
-    expect(report).toContain("失败消息：1");
-    expect(report).toContain("附件文件：1");
-    expect(report).toContain("活跃传输：1");
-    expect(report).toContain("失败传输：1");
-    expect(report).toContain("最近网络警告：Group invite failed");
+    expect(screen.queryByRole("button", { name: "复制会话诊断" })).not.toBeInTheDocument();
+    expect(copyIdentityValue).not.toHaveBeenCalled();
   });
 
   it("offers resume for failed transfers in the details sidebar", async () => {
@@ -537,6 +607,7 @@ describe("Inspector tabs", () => {
 
     expect(screen.getByText("失败")).toBeInTheDocument();
     expect(screen.getByText("失败原因：timeout")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "资料包.zip 传输进度" })).toHaveAttribute("aria-valuenow", "25");
     expect(resumeTransfer).toHaveBeenCalledWith("transfer-failed");
   });
 
@@ -557,7 +628,7 @@ describe("Inspector tabs", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows group member presence and opens direct chat from the sidebar", async () => {
+  it("shows member status icons and keeps private chat in the more menu", async () => {
     const openDirectConversation = vi.fn();
     render(Inspector, {
       props: {
@@ -594,12 +665,11 @@ describe("Inspector tabs", () => {
       },
     });
 
-    expect(screen.getByLabelText("Alice 暂不可达状态")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Alice 离线状态")).not.toBeInTheDocument();
-    expect(screen.queryByText("alice-pc · 暂不可达")).not.toBeInTheDocument();
-    expect(screen.getByText("alice-pc")).toBeInTheDocument();
+    expect(screen.getByText("离线 · 192.168.1.42")).toBeInTheDocument();
+    expect(screen.queryByText(/24251/)).not.toBeInTheDocument();
 
-    await fireEvent.click(screen.getByTitle("与 Alice 私聊"));
+    await fireEvent.click(screen.getByRole("button", { name: "更多 Alice" }));
+    await fireEvent.click(within(screen.getByRole("menu", { name: "Alice 更多操作" })).getByRole("menuitem", { name: "私聊" }));
 
     expect(openDirectConversation).toHaveBeenCalledWith("peer-a");
   });
@@ -640,12 +710,10 @@ describe("Inspector tabs", () => {
     });
 
     const currentMembers = screen.getByRole("group", { name: "当前群成员" });
-    await fireEvent.click(
-      within(currentMembers).getByTitle("复制 Alice 设备 ID"),
-    );
-    await fireEvent.click(
-      within(currentMembers).getByTitle("复制 Alice 设备指纹"),
-    );
+    await fireEvent.click(within(currentMembers).getByRole("button", { name: "更多 Alice" }));
+    const menu = within(currentMembers).getByRole("menu", { name: "Alice 更多操作" });
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "复制 ID" }));
+    await fireEvent.click(within(menu).getByRole("menuitem", { name: "复制指纹" }));
 
     expect(copyIdentityValue).toHaveBeenCalledWith("peer-a", "Alice 设备 ID");
     expect(copyIdentityValue).toHaveBeenCalledWith(
@@ -654,8 +722,7 @@ describe("Inspector tabs", () => {
     );
   });
 
-  it("copies group member direct endpoints from the members sidebar", async () => {
-    const copyIdentityValue = vi.fn();
+  it("shows group member IP without a port or redundant endpoint action", async () => {
     render(Inspector, {
       props: {
         settings,
@@ -679,22 +746,17 @@ describe("Inspector tabs", () => {
             fingerprint: "alice-fingerprint",
           }),
         ],
-        onCopyIdentityValue: copyIdentityValue,
       },
     });
 
     const currentMembers = screen.getByRole("group", { name: "当前群成员" });
-    await fireEvent.click(
-      within(currentMembers).getByTitle("复制 Alice 直连端点"),
-    );
-
-    expect(copyIdentityValue).toHaveBeenCalledWith(
-      "192.168.1.42:24251\n10.8.0.42:24251",
-      "Alice 直连端点",
-    );
+    expect(within(currentMembers).getByText("在线 · 192.168.1.42")).toBeInTheDocument();
+    expect(within(currentMembers).queryByText(/24251/)).not.toBeInTheDocument();
+    await fireEvent.click(within(currentMembers).getByRole("button", { name: "更多 Alice" }));
+    expect(within(currentMembers).queryByRole("menuitem", { name: /端点|IP/ })).not.toBeInTheDocument();
   });
 
-  it("filters group members by reachability", async () => {
+  it("keeps all current members in one list with status icons", async () => {
     render(Inspector, {
       props: {
         settings,
@@ -739,19 +801,11 @@ describe("Inspector tabs", () => {
       },
     });
 
-    expect(
-      screen.getByRole("button", { name: "可联系 2" }),
-    ).toBeInTheDocument();
-    await fireEvent.click(screen.getByRole("button", { name: "暂不可达 1" }));
-
     const currentMembers = screen.getByRole("group", { name: "当前群成员" });
     expect(within(currentMembers).getByText("Offline Bob")).toBeInTheDocument();
-    expect(
-      within(currentMembers).queryByText("Online Alice"),
-    ).not.toBeInTheDocument();
-    expect(
-      within(currentMembers).queryByText("Me（我）"),
-    ).not.toBeInTheDocument();
+    expect(within(currentMembers).getByText("Online Alice")).toBeInTheDocument();
+    expect(within(currentMembers).getByText("Me（我）")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /可联系|暂不可达/ })).not.toBeInTheDocument();
   });
 
   it("keeps unresolved saved group members visible as unreachable placeholders", () => {
@@ -790,11 +844,8 @@ describe("Inspector tabs", () => {
     });
 
     expect(screen.getByText("未发现成员")).toBeInTheDocument();
-    expect(screen.getByText("peer-missing")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "暂不可达 1" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("+0 / -0")).toBeInTheDocument();
+    expect(screen.getByText("离线 · peer-missing")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /可联系|暂不可达/ })).not.toBeInTheDocument();
   });
 
   it("renders away group members with the gray offline visual tone", () => {
@@ -822,10 +873,7 @@ describe("Inspector tabs", () => {
       },
     });
 
-    const presence = screen.getByLabelText("Alice 暂不可达状态");
-    expect(presence).toHaveClass("offline");
-    expect(presence).not.toHaveClass("away");
-    expect(presence).toHaveAttribute("title", "暂不可达");
+    expect(screen.getByText("离线 · 192.168.1.42")).toBeInTheDocument();
     expect(screen.queryByText("离开")).not.toBeInTheDocument();
   });
 
@@ -885,7 +933,7 @@ describe("Inspector tabs", () => {
     expect(saveMetadata).toHaveBeenCalledWith("peer-a");
   });
 
-  it("copies a direct conversation diagnostic report from the details sidebar", async () => {
+  it("keeps conversation diagnostics out of direct details", async () => {
     const copyIdentityValue = vi.fn();
     render(Inspector, {
       props: {
@@ -915,23 +963,8 @@ describe("Inspector tabs", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "复制会话诊断" }));
-
-    expect(copyIdentityValue).toHaveBeenCalledTimes(1);
-    const [report, label] = copyIdentityValue.mock.calls[0];
-    expect(label).toBe("会话诊断报告");
-    expect(report).toContain("灵犀内网通会话诊断");
-    expect(report).toContain("会话：Alice");
-    expect(report).toContain("会话 ID：direct:peer-a");
-    expect(report).toContain("类型：直连");
-    expect(report).toContain("Alice 可联系，端点 192.168.1.42:24251");
-    expect(report).toContain("免打扰：是");
-    expect(report).toContain("归档：是");
-    expect(report).toContain("消息数量：2");
-    expect(report).toContain("待发送/发送中消息：1");
-    expect(report).toContain("附件文件：1");
-    expect(report).toContain("失败传输：1");
-    expect(report).toContain("最近网络警告：QUIC send failed");
+    expect(screen.queryByRole("button", { name: "复制会话诊断" })).not.toBeInTheDocument();
+    expect(copyIdentityValue).not.toHaveBeenCalled();
   });
 
   it("shows recent conversation files from message attachments", async () => {

@@ -7,7 +7,7 @@
 
 - `.gitignore` — Git ignore rules (~32 tok)
 - `CLAUDE.md` — OpenWolf (~57 tok)
-- `index.html` — Lingxi LAN Messenger (~1140 tok)
+- `index.html` — iim (~1140 tok)
 - `package-lock.json` — npm lock file (~29419 tok)
 - `package.json` — Node.js package manifest (~225 tok)
 - `README.md` — Project documentation (~418 tok)

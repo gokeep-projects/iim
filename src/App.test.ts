@@ -122,6 +122,22 @@ const tauriInvoke = vi.hoisted(() =>
   }),
 );
 const defaultTauriInvoke = tauriInvoke.getMockImplementation()!;
+let autoOpenInitialConversation = true;
+let autoOpenInitialConversationObserver: MutationObserver | null = null;
+
+function installInitialConversationAutoOpen() {
+  autoOpenInitialConversationObserver?.disconnect();
+  autoOpenInitialConversationObserver = new MutationObserver(() => {
+    if (!autoOpenInitialConversation) return;
+    const welcome = document.querySelector<HTMLElement>('[aria-label="空会话"]');
+    const recentButton = welcome?.querySelector<HTMLButtonElement>('[aria-label="最近消息"] button');
+    if (!recentButton || recentButton.dataset.testAutoOpening === "true") return;
+    recentButton.dataset.testAutoOpening = "true";
+    recentButton.click();
+  });
+  autoOpenInitialConversationObserver.observe(document.body, { childList: true, subtree: true });
+}
+
 async function waitForInitialConversationLoad(options: { openConversation?: boolean } = {}) {
   const shell = await screen.findByRole("region", { name: /聊天工作区|空会话/ });
   if (options.openConversation !== false && shell.getAttribute("aria-label") === "空会话") {
@@ -146,6 +162,12 @@ async function findMessageBubble(messageId: string) {
 
 async function findDemoMessageBubble() {
   return findMessageBubble("hello");
+}
+
+async function openMessageMenuMore() {
+  await fireEvent.click(
+    await screen.findByRole("menuitem", { name: "更多消息操作" }),
+  );
 }
 
 const dialogSave = vi.hoisted(() =>
@@ -178,6 +200,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: vi.fn(() => ({
+    isMaximized: vi.fn(() => Promise.resolve(true)),
+    minimize: vi.fn(() => Promise.resolve()),
+    maximize: vi.fn(() => Promise.resolve()),
+    unmaximize: vi.fn(() => Promise.resolve()),
+    close: vi.fn(() => Promise.resolve()),
     onDragDropEvent: vi.fn((handler) => {
       tauriDragDropHandlers.push(handler);
       return Promise.resolve(() => {
@@ -236,7 +263,7 @@ async function findDirectoryProfileCard() {
   });
   return (
     profileCards.find((card) =>
-      card.classList.contains("contact-profile-card"),
+      card.classList.contains("contact-detail-pane"),
     ) ?? profileCards[0]
   );
 }
@@ -306,6 +333,8 @@ async function openComposerMoreTools() {
 
 describe("App", () => {
   beforeEach(() => {
+    autoOpenInitialConversation = true;
+    installInitialConversationAutoOpen();
     tauriEventListeners.clear();
     tauriDragDropHandlers.length = 0;
     notificationActionHandlers.length = 0;
@@ -322,6 +351,8 @@ describe("App", () => {
   });
 
   afterEach(() => {
+    autoOpenInitialConversationObserver?.disconnect();
+    autoOpenInitialConversationObserver = null;
     vi.useRealTimers();
   });
 
@@ -341,7 +372,7 @@ describe("App", () => {
           login_enabled: true,
           login_password_hash: "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
           profile_signature: "专注内网直连",
-          avatar_label: "灵",
+          avatar_label: "i",
           require_contact_for_messaging: false,
         });
       }
@@ -351,7 +382,7 @@ describe("App", () => {
     render(App);
 
     const unlock = await screen.findByRole("dialog", { name: "登录解锁" });
-    expect(within(unlock).getByText("灵犀内网通已锁定")).toBeInTheDocument();
+    expect(within(unlock).getByText("iim 已锁定")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "聊天工作区" })).not.toBeInTheDocument();
 
     await fireEvent.input(within(unlock).getByLabelText("登录密码"), {
@@ -392,7 +423,7 @@ describe("App", () => {
           login_enabled: false,
           login_password_hash: "",
           profile_signature: "专注内网直连",
-          avatar_label: "灵",
+          avatar_label: "i",
           require_contact_for_messaging: false,
         });
       }
@@ -402,6 +433,7 @@ describe("App", () => {
       return defaultTauriInvoke(command);
     });
     render(App);
+    await waitForInitialConversationLoad();
 
     const rail = await screen.findByRole("navigation", { name: "主导航" });
     await fireEvent.click(within(rail).getByRole("button", { name: "打开个人菜单" }));
@@ -409,12 +441,15 @@ describe("App", () => {
     const menu = await screen.findByRole("menu", { name: "个人快捷菜单" });
     expect(within(menu).getByText("本机用户")).toBeInTheDocument();
     expect(within(menu).getByText("专注内网直连")).toBeInTheDocument();
-    expect(within(menu).getByText("local-preview · 0.0.0.0:24251")).toBeInTheDocument();
+    expect(within(menu).queryByText("local-preview · 0.0.0.0:24251")).not.toBeInTheDocument();
     expect(within(menu).getByRole("menuitemradio", { name: "在线" })).toHaveAttribute("aria-checked", "true");
     expect(within(menu).getByRole("menuitemradio", { name: "离开" })).toHaveAttribute("aria-checked", "false");
     expect(within(menu).getByRole("menuitem", { name: "编辑签名" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "设置头像" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "打开设置" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "刷新联系人" })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "联系人" })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("menuitem", { name: "文件传输" })).not.toBeInTheDocument();
 
     await fireEvent.click(within(menu).getByRole("menuitemradio", { name: "离开" }));
     expect(tauriInvoke).toHaveBeenCalledWith(
@@ -428,7 +463,7 @@ describe("App", () => {
   it("renders the production-style Svelte LAN messenger shell", async () => {
     render(App);
 
-    expect(await screen.findByText("灵")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "打开个人菜单" })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText("搜索会话、联系人、聊天记录")).not.toBeInTheDocument();
     expect((await screen.findAllByText("消息")).length).toBeGreaterThan(0);
     expect(await screen.findByTitle("联系人")).toBeInTheDocument();
@@ -458,10 +493,11 @@ describe("App", () => {
     expect(await screen.findByRole("status", { name: "启动进度" })).toBeInTheDocument();
 
     resolveProfile(await defaultTauriInvoke("get_self_profile"));
-    await waitForInitialConversationLoad({ openConversation: false });
+    await waitForInitialConversationLoad();
   });
 
   it("seeds preview conversations and contacts in an empty Tauri workspace", async () => {
+    autoOpenInitialConversation = false;
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -478,7 +514,7 @@ describe("App", () => {
 	    expect(screen.getByRole("region", { name: "空会话" })).toBeInTheDocument();
 	    const recent = screen.getByRole("region", { name: "最近消息" });
 	    expect(within(recent).getByText("产品经理")).toBeInTheDocument();
-	    expect(within(recent).getByText("欢迎使用灵犀内网通，搜索、文件和群聊入口都在这里。")).toBeInTheDocument();
+	    expect(within(recent).getByText("欢迎使用 iim，搜索、文件和群聊入口都在这里。")).toBeInTheDocument();
 	    expect(
 	      tauriInvoke.mock.calls.some((call) => {
 	        const [command, args] = call as [string, { conversationId?: string }?];
@@ -498,7 +534,59 @@ describe("App", () => {
 	    );
   });
 
+  it("keeps demo peers and group examples visible when discovery is empty but old conversations exist", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    tauriInvoke.mockImplementation((command: string) => {
+      if (command === "list_peers") return Promise.resolve([]);
+      if (command === "list_conversations") {
+        return Promise.resolve([
+          {
+            id: "direct:demo-ops",
+            title: "demo-ops",
+            group_owner_peer_id: "",
+            last_message_at: 1_700_000_000_000,
+            last_message_preview: "消息预览已隐藏",
+            unread_count: 33,
+            manual_unread: false,
+            pinned: false,
+            muted: false,
+            archived: false,
+            draft_preview: "",
+          },
+        ]);
+      }
+      return defaultTauriInvoke(command);
+    });
+
+    render(App);
+    await waitForInitialConversationLoad();
+
+    expect(screen.getAllByText("产品经理").length).toBeGreaterThan(0);
+    expect(screen.getByText("Alpha 项目组")).toBeInTheDocument();
+    expect(screen.getByText("办公室通知")).toBeInTheDocument();
+    expect(screen.getByText("客服值班群")).toBeInTheDocument();
+    expect(screen.getByText("运维中控")).toBeInTheDocument();
+    expect(screen.getByText("研发七号")).toBeInTheDocument();
+    expect(screen.getByText("客服八号")).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/群聊头像$/).length).toBeGreaterThanOrEqual(5);
+
+    await fireEvent.click(screen.getByRole("tab", { name: /联系人/ }));
+    expect(
+      within(screen.getByRole("list", { name: "联系人列表" })).getAllByRole("listitem").length,
+    ).toBeGreaterThanOrEqual(16);
+    expect(
+      tauriInvoke.mock.calls.some((call) => {
+        const [command, args] = call as [string, { conversationId?: string }?];
+        return command === "list_messages" && args?.conversationId === "direct:demo-peer";
+      }),
+    ).toBe(true);
+  });
+
   it("disables current conversation tools in an empty Tauri workspace", async () => {
+    autoOpenInitialConversation = false;
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -528,6 +616,7 @@ describe("App", () => {
   });
 
   it("does not publish typing events without an active conversation", async () => {
+    autoOpenInitialConversation = false;
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -539,7 +628,7 @@ describe("App", () => {
     });
 
     render(App);
-    await waitForInitialConversationLoad();
+    await waitForInitialConversationLoad({ openConversation: false });
 
 	    expect(screen.getByRole("region", { name: "空会话" })).toBeInTheDocument();
 	    expect(screen.queryByPlaceholderText("输入消息")).not.toBeInTheDocument();
@@ -552,12 +641,19 @@ describe("App", () => {
     ).toBe(false);
   });
 
-  it("renders unread conversations with a compact unread badge", async () => {
+  it("keeps unread state out of visible conversation row chrome", async () => {
     render(App);
 
-    expect(
-      await screen.findByLabelText("研发一号 2 条未读"),
-    ).toBeInTheDocument();
+    const conversationList = document.querySelector(".conversation-list");
+    expect(conversationList).not.toBeNull();
+    const conversationButton = await within(
+      conversationList as HTMLElement,
+    ).findByRole("button", { name: /研发一号/ });
+    const conversationRow = conversationButton.closest(".conversation-item");
+
+    expect(conversationRow).toBeInTheDocument();
+    expect(conversationRow).not.toHaveClass("unread");
+    expect(conversationRow?.querySelector(".unread-badge")).not.toBeInTheDocument();
   });
 
   it("switches to settings and contact workspaces", async () => {
@@ -565,7 +661,9 @@ describe("App", () => {
 
     await fireEvent.click(await screen.findByTitle("设置"));
     const workspace = await screen.findByRole("region", { name: "功能工作区" });
-    expect(within(workspace).getByText("工作台配置")).toBeInTheDocument();
+    expect(
+      within(workspace).getByRole("heading", { name: "设置" }),
+    ).toBeInTheDocument();
     expect(within(workspace).getByText("个人")).toBeInTheDocument();
     expect(
       within(workspace).getByRole("button", { name: "网络" }),
@@ -582,7 +680,7 @@ describe("App", () => {
     );
     expect(within(workspace).getByText("发现端口")).toBeInTheDocument();
     expect(within(workspace).getByText("24250/UDP")).toBeInTheDocument();
-    expect(within(workspace).getByText("24251/QUIC")).toBeInTheDocument();
+    expect(within(workspace).getAllByText("24251/QUIC").length).toBeGreaterThan(0);
     expect(
       within(workspace).getByText(/Windows 防火墙提示/),
     ).toBeInTheDocument();
@@ -598,16 +696,20 @@ describe("App", () => {
     await fireEvent.click(
       within(workspace).getByRole("button", { name: "安全" }),
     );
-    expect(within(workspace).getByText("信任概览")).toBeInTheDocument();
-    expect(within(workspace).getByText(/已发现 3 台设备/)).toBeInTheDocument();
-    expect(within(workspace).getByText("已信任设备")).toBeInTheDocument();
+    expect(within(workspace).getByText("设备指纹信任")).toBeInTheDocument();
+    expect(within(workspace).getByText(/已发现 13 台设备/)).toBeInTheDocument();
+    expect(within(workspace).getByText("设备指纹")).toBeInTheDocument();
     expect(
-      within(workspace).getAllByRole("button", { name: /移除信任/ }).length,
+      within(workspace).getAllByRole("button", { name: /移除 .* 信任/ }).length,
     ).toBeGreaterThan(0);
 
     await openContactDirectoryWorkspace();
-    expect(await screen.findByText("内网设备")).toBeInTheDocument();
-    expect(await screen.findByText("创建群聊")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "联系人" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "创建群聊" }),
+    ).toBeInTheDocument();
   });
 
   it("does not expose an auto discovery toggle in default network settings", async () => {
@@ -710,12 +812,14 @@ describe("App", () => {
     await fireEvent.click(await screen.findByTitle("设置"));
     const workspace = await screen.findByRole("region", { name: "功能工作区" });
     await fireEvent.click(within(workspace).getByRole("button", { name: "存储" }));
-    await fireEvent.click(within(workspace).getByRole("button", { name: "迁移数据目录" }));
+    await fireEvent.click(within(workspace).getByRole("button", { name: "选择新的数据目录" }));
 
-    expect(dialogOpen).toHaveBeenCalledWith({
-      directory: true,
-      multiple: false,
-      title: "选择新的灵犀内网通数据目录",
+    await waitFor(() => {
+      expect(dialogOpen).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        title: "选择新的 iim 数据目录",
+      });
     });
     const dialog = await screen.findByRole("dialog", { name: "数据目录迁移中" });
     expect(within(dialog).getByText(/迁移完成前暂时不能操作应用/)).toBeInTheDocument();
@@ -758,14 +862,16 @@ describe("App", () => {
 
     expect(event.defaultPrevented).toBe(true);
     const workspace = await screen.findByRole("region", { name: "功能工作区" });
-    expect(within(workspace).getByText("工作台配置")).toBeInTheDocument();
+    expect(
+      within(workspace).getByRole("heading", { name: "设置" }),
+    ).toBeInTheDocument();
     expect(within(workspace).getByText("个人")).toBeInTheDocument();
   });
 
   it("opens the current conversation history search with Ctrl+K", async () => {
     render(App);
 
-    await screen.findByRole("region", { name: "聊天工作区" });
+    await waitForInitialConversationLoad();
     const event = new KeyboardEvent("keydown", {
       key: "k",
       ctrlKey: true,
@@ -775,7 +881,7 @@ describe("App", () => {
     document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
-    const conversationSearchInput = await screen.findByPlaceholderText("搜索当前会话");
+    const conversationSearchInput = await screen.findByPlaceholderText("查询聊天记录");
     await waitFor(() => expect(document.activeElement).toBe(conversationSearchInput));
   });
 
@@ -793,9 +899,11 @@ describe("App", () => {
     render(App);
     await waitForInitialConversationLoad();
 
-    await fireEvent.click(within(await openComposerMoreTools()).getByRole("button", { name: "搜索" }));
+    await fireEvent.click(
+      within(await screen.findByRole("group", { name: "会话标题栏" })).getByRole("button", { name: "搜索聊天记录" }),
+    );
     const conversationSearchInput =
-      await screen.findByPlaceholderText("搜索当前会话");
+      await screen.findByPlaceholderText("查询聊天记录");
     await fireEvent.input(conversationSearchInput, {
       target: { value: "文件" },
     });
@@ -822,6 +930,47 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("loads and focuses a search result outside the current message page", async () => {
+    const historicalMessage: ChatMessage = {
+      id: "historical-search-result",
+      conversation_id: "direct:demo-peer",
+      sender_id: "demo-peer",
+      body: "historical searchable message",
+      attachments: [],
+      created_at: Date.now() - 86_400_000,
+      status: "delivered",
+      recalled: false,
+      quote: null,
+      favorited: false,
+      reactions: [],
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    tauriInvoke.mockImplementation((command: string) => {
+      if (command === "search_conversation_messages") return Promise.resolve([historicalMessage]);
+      return defaultTauriInvoke(command);
+    });
+    render(App);
+    await waitForInitialConversationLoad();
+
+    await fireEvent.click(
+      within(await screen.findByRole("group", { name: "会话标题栏" })).getByRole("button", { name: "搜索聊天记录" }),
+    );
+    const searchInput = await screen.findByPlaceholderText("查询聊天记录");
+    await fireEvent.input(searchInput, { target: { value: "historical" } });
+    const searchForm = searchInput.closest("form");
+    expect(searchForm).not.toBeNull();
+    await fireEvent.submit(searchForm as HTMLFormElement);
+
+    await waitFor(() => {
+      const focusedBubble = document.querySelector(".message-bubble.focused");
+      expect(focusedBubble).toHaveTextContent("historical searchable message");
+    });
+    expect(document.querySelector(".chat-workspace")).toBeInTheDocument();
+  });
+
   it("opens settings preferences when the tray menu requests settings", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
@@ -834,8 +983,11 @@ describe("App", () => {
     emitTauriEvent("window:open_settings", "preferences");
 
     const workspace = await screen.findByRole("region", { name: "功能工作区" });
-    expect(within(workspace).getByText("工作台配置")).toBeInTheDocument();
-    expect(within(workspace).getByText("工作台偏好")).toBeInTheDocument();
+    expect(
+      within(workspace).getByRole("heading", { name: "设置" }),
+    ).toBeInTheDocument();
+    expect(within(workspace).queryByText("工作台偏好")).not.toBeInTheDocument();
+    expect(within(workspace).getByRole("region", { name: "提醒与隐私" })).toBeInTheDocument();
   });
 
   it("offers self presence controls in profile settings", async () => {
@@ -875,12 +1027,18 @@ describe("App", () => {
       target: { value: "新的本机名称" },
     });
     await fireEvent.click(
-      within(workspace).getByRole("button", { name: "保存本机资料" }),
+      within(workspace).getByRole("button", { name: "保存个人信息" }),
     );
 
     expect(
       await screen.findByText("本机资料保存失败：profile db locked"),
     ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(tauriInvoke).not.toHaveBeenCalledWith(
+        "update_app_preferences",
+        expect.anything(),
+      );
+    });
   });
 
   it("copies local identity values from profile settings", async () => {
@@ -938,10 +1096,10 @@ describe("App", () => {
       within(workspace).getByRole("button", { name: "安全" }),
     );
     expect(
-      await within(workspace).findByText("已信任设备"),
+      await within(workspace).findByText("设备指纹"),
     ).toBeInTheDocument();
     await fireEvent.click(
-      within(workspace).getByRole("button", { name: "移除信任" }),
+      within(workspace).getByRole("button", { name: /移除 .* 信任/ }),
     );
     const cancelDialog = await screen.findByRole("dialog", {
       name: "确认移除设备信任",
@@ -959,11 +1117,11 @@ describe("App", () => {
       expect.anything(),
     );
     expect(
-      within(workspace).getByRole("button", { name: "移除信任" }),
+      within(workspace).getByRole("button", { name: /移除 .* 信任/ }),
     ).toBeInTheDocument();
 
     await fireEvent.click(
-      within(workspace).getByRole("button", { name: "移除信任" }),
+      within(workspace).getByRole("button", { name: /移除 .* 信任/ }),
     );
     const confirmDialog = await screen.findByRole("dialog", {
       name: "确认移除设备信任",
@@ -993,7 +1151,7 @@ describe("App", () => {
     await fireEvent.click(await screen.findByTitle("设置"));
     const workspace = await screen.findByRole("region", { name: "功能工作区" });
     await fireEvent.click(within(workspace).getByRole("button", { name: "安全" }));
-    await fireEvent.click(within(workspace).getByRole("button", { name: "需要添加好友" }));
+    await fireEvent.click(within(workspace).getByRole("radio", { name: "仅联系人可通信" }));
 
     await waitFor(() => {
       expect(tauriInvoke).toHaveBeenCalledWith("update_app_preferences", {
@@ -1146,14 +1304,19 @@ describe("App", () => {
       name: "联系人资料",
     });
     const profileCard = profileCards.find((card) =>
-      card.classList.contains("contact-profile-card"),
+      card.classList.contains("contact-detail-pane"),
     );
     expect(profileCard).toBeDefined();
     expect(
       within(profileCard as HTMLElement).getByRole("heading", { name: "研发一号" }),
     ).toBeInTheDocument();
-    expect(within(profileCard as HTMLElement).getByText("设备指纹")).toBeInTheDocument();
-    expect(within(profileCard as HTMLElement).getByText("直连端点")).toBeInTheDocument();
+    const technicalDetails = within(profileCard as HTMLElement)
+      .getByText("设备与安全信息")
+      .closest("details");
+    expect(technicalDetails).not.toBeNull();
+    expect(technicalDetails).not.toHaveAttribute("open");
+    expect(within(profileCard as HTMLElement).getByText("设备指纹")).not.toBeVisible();
+    expect(within(profileCard as HTMLElement).getByText("IP 地址")).not.toBeVisible();
     expect(
       within(profileCard as HTMLElement).getByRole("button", { name: "发消息" }),
     ).toBeInTheDocument();
@@ -1211,7 +1374,7 @@ describe("App", () => {
     const workspace = await openContactDirectoryWorkspace();
     const bobSummaryButton = within(workspace)
       .getAllByRole("button")
-      .find((button) => button.classList.contains("contact-select-summary") && button.textContent?.includes("Bob"));
+      .find((button) => button.classList.contains("directory-contact-select") && button.textContent?.includes("Bob"));
     expect(bobSummaryButton).toBeDefined();
     await fireEvent.click(bobSummaryButton as HTMLButtonElement);
 
@@ -1221,45 +1384,88 @@ describe("App", () => {
     expect(within(profileCard).queryByRole("heading", { name: "Alice" })).not.toBeInTheDocument();
   });
 
-  it("groups contacts by reachability with device actions", async () => {
+  it("shows a searchable flat contact list with device actions", async () => {
     render(App);
 
     await openContactDirectoryWorkspace();
-    expect(await screen.findByText("可联系设备")).toBeInTheDocument();
-    expect(await screen.findByText("暂不可达设备")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("searchbox", { name: "搜索联系人" }),
+    ).toBeInTheDocument();
     const contactOverview = await screen.findByLabelText("联系人概览");
-    expect(within(contactOverview).getByText(/可联系 2/)).toBeInTheDocument();
-    expect(within(contactOverview).getByText(/暂不可达 1/)).toBeInTheDocument();
+    expect(within(contactOverview).getByText(/13 位联系人/)).toBeInTheDocument();
+    expect(within(contactOverview).getByText(/10 可联系/)).toBeInTheDocument();
 
-    const reachableGroup = await screen.findByRole("group", {
-      name: /可联系设备/,
+    const reachableGroup = await screen.findByRole("region", {
+      name: "发现设备列表",
     });
     expect(
       within(reachableGroup).getByRole("button", { name: "和 研发一号 聊天" }),
     ).toBeInTheDocument();
     expect(
-      within(reachableGroup).getByRole("button", {
+      within(reachableGroup).queryByRole("button", {
         name: "选择 研发一号 加入群聊",
       }),
-    ).toBeInTheDocument();
+    ).not.toBeInTheDocument();
+    expect(within(contactOverview).queryByText(/已选/)).not.toBeInTheDocument();
+  });
+
+  it("selects searchable members inside the group creation dialog", async () => {
+    render(App);
+
+    const workspace = await openContactDirectoryWorkspace();
+    await fireEvent.click(within(workspace).getByRole("button", { name: "创建群聊" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "创建群聊" });
+    expect(within(dialog).getByText("已选择 0 位联系人")).toBeInTheDocument();
+    expect(within(dialog).getByText("研发一号")).toBeInTheDocument();
+    expect(within(dialog).getByText("客服八号")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "创建" })).toBeDisabled();
+
+    const memberSearch = within(dialog).getByRole("searchbox", { name: "搜索群成员" });
+    await fireEvent.input(memberSearch, { target: { value: "研发" } });
+    expect(within(dialog).getByText("研发一号")).toBeInTheDocument();
+    expect(within(dialog).queryByText("客服八号")).not.toBeInTheDocument();
+    await fireEvent.click(within(dialog).getByRole("button", { name: "选择成员 研发一号" }));
+
+    await fireEvent.input(memberSearch, { target: { value: "客服" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "选择成员 客服八号" }));
+    expect(within(dialog).getByText("已选择 2 位联系人")).toBeInTheDocument();
+
+    const nameInput = within(dialog).getByRole("textbox", { name: "群聊名称" });
+    await fireEvent.input(nameInput, { target: { value: "项目验收组" } });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "创建" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "创建群聊" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("heading", { name: "项目验收组" })).toBeInTheDocument();
+  });
+
+  it("clears unfinished group member selections when the dialog closes", async () => {
+    render(App);
+
+    const workspace = await openContactDirectoryWorkspace();
+    await fireEvent.click(within(workspace).getByRole("button", { name: "创建群聊" }));
+    let dialog = await screen.findByRole("dialog", { name: "创建群聊" });
+    await fireEvent.click(within(dialog).getByRole("button", { name: "选择成员 研发一号" }));
+    expect(within(dialog).getByText("已选择 1 位联系人")).toBeInTheDocument();
+    await fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+
+    await fireEvent.click(within(workspace).getByRole("button", { name: "创建群聊" }));
+    dialog = await screen.findByRole("dialog", { name: "创建群聊" });
+    expect(within(dialog).getByText("已选择 0 位联系人")).toBeInTheDocument();
+    expect(within(dialog).getByRole("searchbox", { name: "搜索群成员" })).toHaveValue("");
   });
 
   it("opens an app-owned contact context menu from the contact directory", async () => {
-    const writeText = vi.fn(async (_value: string) => undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
     render(App);
 
     await waitForInitialConversationLoad();
     await openContactDirectoryWorkspace();
-    const reachableGroup = await screen.findByRole("group", {
-      name: /可联系设备/,
+    const reachableGroup = await screen.findByRole("region", {
+      name: "发现设备列表",
     });
     const contactSummaryButton = within(reachableGroup)
       .getAllByRole("button")
-      .find((button) => button.classList.contains("contact-select-summary"));
+      .find((button) => button.classList.contains("directory-contact-select"));
     expect(contactSummaryButton).toBeDefined();
     await fireEvent.contextMenu(contactSummaryButton as HTMLButtonElement);
 
@@ -1280,122 +1486,56 @@ describe("App", () => {
     expect(
       within(contactMenu).getByRole("menuitem", { name: "阻止联系人" }),
     ).toBeInTheDocument();
-    expect(
-      within(contactMenu).getByRole("menuitem", { name: "复制研发一号指纹" }),
-    ).toBeInTheDocument();
-    expect(
-      within(contactMenu).getByRole("menuitem", { name: "复制研发一号端点" }),
-    ).toBeInTheDocument();
-    await fireEvent.click(
-      within(contactMenu).getByRole("menuitem", {
-        name: "复制研发一号设备 ID",
-      }),
-    );
-    expect(writeText).toHaveBeenCalledWith("demo-peer");
-    expect(
-      await screen.findByText(/设备 ID已复制，可用于人工核验设备身份/),
-    ).toBeInTheDocument();
-
-    await fireEvent.contextMenu(contactSummaryButton as HTMLButtonElement);
-    const reopenedContactMenu = await screen.findByRole("menu", {
-      name: "联系人快捷菜单",
-    });
-    await fireEvent.click(
-      within(reopenedContactMenu).getByRole("menuitem", {
-        name: "复制研发一号指纹",
-      }),
-    );
-    expect(writeText).toHaveBeenCalledWith("f".repeat(64));
-    expect(
-      await screen.findByText(/指纹已复制，可用于人工核验设备身份/),
-    ).toBeInTheDocument();
-
-    await fireEvent.contextMenu(contactSummaryButton as HTMLButtonElement);
-    const endpointContactMenu = await screen.findByRole("menu", {
-      name: "联系人快捷菜单",
-    });
-    await fireEvent.click(
-      within(endpointContactMenu).getByRole("menuitem", {
-        name: "复制研发一号端点",
-      }),
-    );
-    expect(writeText).toHaveBeenCalledWith("192.168.1.42:24251");
-    expect(
-      await screen.findByText(/端点已复制，可用于网络排障/),
-    ).toBeInTheDocument();
+    expect(within(contactMenu).getAllByRole("menuitem")).toHaveLength(4);
+    expect(within(contactMenu).queryByRole("menuitem", { name: "复制研发一号设备 ID" })).not.toBeInTheDocument();
+    expect(within(contactMenu).queryByRole("menuitem", { name: "复制研发一号指纹" })).not.toBeInTheDocument();
+    expect(within(contactMenu).queryByRole("menuitem", { name: "复制研发一号端点" })).not.toBeInTheDocument();
+    await fireEvent.click(within(contactMenu).getByRole("menuitem", { name: "联系人详情" }));
     expect(document.querySelector(".contact-context-menu")).not.toBeInTheDocument();
     expect(document.querySelector(".app-context-menu")).not.toBeInTheDocument();
   }, 15000);
 
-  it("copies a contact diagnostic report from the contact context menu", async () => {
-    const writeText = vi.fn(async (_value: string) => undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
+  it("keeps low-frequency diagnostics out of the contact context menu", async () => {
     render(App);
 
     await openContactDirectoryWorkspace();
-    const reachableGroup = await screen.findByRole("group", {
-      name: /可联系设备/,
+    const reachableGroup = await screen.findByRole("region", {
+      name: "发现设备列表",
     });
     const contactSummaryButton = within(reachableGroup)
       .getAllByRole("button")
-      .find((button) => button.classList.contains("contact-select-summary"));
+      .find((button) => button.classList.contains("directory-contact-select"));
     expect(contactSummaryButton).toBeDefined();
     await fireEvent.contextMenu(contactSummaryButton as HTMLButtonElement);
     const contactMenu = await screen.findByRole("menu", {
       name: "联系人快捷菜单",
     });
-    await fireEvent.click(
-      within(contactMenu).getByRole("menuitem", { name: "复制联系人诊断" }),
-    );
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    const report = writeText.mock.calls[0]?.[0] ?? "";
-    expect(report).toContain("灵犀内网通联系人诊断");
-    expect(report).toContain("联系人：研发一号");
-    expect(report).toContain("设备 ID：demo-peer");
-    expect(report).toContain("状态：可联系");
-    expect(report).toContain("端点：192.168.1.42:24251");
-    expect(report).toContain("信任状态：");
-    expect(report).toContain("会话 ID：direct:demo-peer");
-    expect(report).toContain("传输任务：");
-    expect(report).toContain("活跃传输：");
-    expect(await screen.findByText("研发一号 联系人诊断报告已复制")).toBeInTheDocument();
+    expect(within(contactMenu).queryByRole("menuitem", { name: "复制联系人诊断" })).not.toBeInTheDocument();
+    expect(within(contactMenu).queryByRole("menuitem", { name: "复制设备 ID" })).not.toBeInTheDocument();
+    expect(within(contactMenu).queryByRole("menuitem", { name: "复制端点" })).not.toBeInTheDocument();
+    expect(within(contactMenu).queryByRole("menuitem", { name: "复制指纹" })).not.toBeInTheDocument();
   });
 
   it("blocks a contact from new direct chats and group selection", async () => {
     render(App);
 
     await openContactDirectoryWorkspace();
-    const reachableGroup = await screen.findByRole("group", {
-      name: /可联系设备/,
+    const reachableGroup = await screen.findByRole("region", {
+      name: "发现设备列表",
     });
-    expect(
-      await within(reachableGroup).findByText(/原名 研发一号/),
-    ).toBeInTheDocument();
+    expect(await within(reachableGroup).findByText("研发一号")).toBeInTheDocument();
+    const profileCard = await findDirectoryProfileCard();
     await fireEvent.click(
-      within(reachableGroup).getAllByTitle("阻止联系人")[0],
+      within(profileCard).getByRole("button", { name: "阻止联系人" }),
     );
-
-    await waitFor(() => {
-      const updatedReachableGroup = screen.getByRole("group", {
-        name: /可联系设备/,
-      });
-      const blockButtons =
-        updatedReachableGroup.querySelectorAll<HTMLButtonElement>(
-          ".danger-toggle",
-        );
-      expect(blockButtons[0]).toHaveClass("active");
-    });
 
     const messageLoadCallsBefore = tauriInvoke.mock.calls.filter(
       ([command]) => command === "list_messages",
     ).length;
     const blockedSummaryButton = within(reachableGroup)
       .getAllByRole("button")
-      .find((button) => button.classList.contains("contact-select-summary"));
+      .find((button) => button.classList.contains("directory-contact-select"));
     expect(blockedSummaryButton).toBeDefined();
     await fireEvent.contextMenu(blockedSummaryButton as HTMLButtonElement);
     const contactMenu = await screen.findByRole("menu", {
@@ -1537,7 +1677,7 @@ describe("App", () => {
     ).toBeGreaterThan(0);
     expect(within(chatWorkspace).queryByText("在线")).not.toBeInTheDocument();
 
-    await fireEvent.click(within(await openComposerMoreTools()).getByRole("button", { name: "详情" }));
+    await fireEvent.click(within(screen.getByRole("group", { name: "会话标题栏" })).getByRole("button", { name: "查看直聊资料" }));
     const inspector = await screen.findByLabelText("会话详情面板");
     expect(
       within(inspector).getAllByLabelText("研发一号 可联系状态").length,
@@ -1602,10 +1742,10 @@ describe("App", () => {
   it("shows persisted transfer history in the files workspace", async () => {
     render(App);
 
+    await waitForInitialConversationLoad();
     await fireEvent.click(await screen.findByTitle("文件传输"));
-    expect(await screen.findByText("传输概览")).toBeInTheDocument();
-    expect(await screen.findByText("活跃传输")).toBeInTheDocument();
-    expect(await screen.findByText("历史记录")).toBeInTheDocument();
+    expect(await screen.findByLabelText("文件传输统计")).toBeInTheDocument();
+    expect(await screen.findByText("文件传输历史")).toBeInTheDocument();
     expect(await screen.findByText("设计稿同步")).toBeInTheDocument();
     expect(await screen.findByText("历史资料包")).toBeInTheDocument();
     expect((await screen.findAllByText("已完成")).length).toBeGreaterThan(0);
@@ -1613,9 +1753,10 @@ describe("App", () => {
       await screen.findByRole("progressbar", { name: "设计稿同步 传输进度" }),
     ).toBeInTheDocument();
 
-    const activeTransfers = await screen.findByRole("region", {
-      name: "活跃传输",
+    const transferHistory = await screen.findByRole("region", {
+      name: "文件传输历史",
     });
+    const activeTransfers = (within(transferHistory).getByText("设计稿同步").closest("article") ?? transferHistory) as HTMLElement;
     const cancelButton = within(activeTransfers).getByRole("button", {
       name: "取消",
     });
@@ -1624,10 +1765,7 @@ describe("App", () => {
       within(activeTransfers).queryByRole("button", { name: "删除" }),
     ).not.toBeInTheDocument();
     expect(
-      within(await screen.findByRole("region", { name: "历史记录" })).getByRole(
-        "button",
-        { name: "删除" },
-      ),
+      within((within(transferHistory).getByText("历史资料包").closest("article") ?? transferHistory) as HTMLElement).getByRole("button", { name: "删除" }),
     ).toBeInTheDocument();
 
     await fireEvent.click(cancelButton);
@@ -1662,7 +1800,7 @@ describe("App", () => {
 
     await waitForInitialConversationLoad();
     await fireEvent.click(await screen.findByTitle("文件传输"));
-    const history = await screen.findByRole("region", { name: "历史记录" });
+    const history = await screen.findByRole("region", { name: "文件传输历史" });
     expect(within(history).getByText("danger-history.zip")).toBeInTheDocument();
     await fireEvent.click(
       within(history).getByRole("button", { name: "删除" }),
@@ -1813,7 +1951,7 @@ describe("App", () => {
     );
 
     const diagnosticReport = writeText.mock.calls[writeText.mock.calls.length - 1]?.[0] ?? "";
-    expect(diagnosticReport).toContain("灵犀内网通传输记录");
+    expect(diagnosticReport).toContain("iim 传输记录");
     expect(diagnosticReport).toContain("任务 ID：transfer-context-copy");
     expect(diagnosticReport).toContain("会话：direct:demo-peer");
     expect(diagnosticReport).toContain("状态：失败 (failed)");
@@ -1852,7 +1990,7 @@ describe("App", () => {
 
     await waitForInitialConversationLoad();
     await fireEvent.click(await screen.findByTitle("文件传输"));
-    const history = await screen.findByRole("region", { name: "历史记录" });
+    const history = await screen.findByRole("region", { name: "文件传输历史" });
     await fireEvent.click(
       within(history).getByRole("button", { name: "删除" }),
     );
@@ -2003,19 +2141,27 @@ describe("App", () => {
     await fireEvent.click(
       await screen.findByRole("button", { name: /内网群聊/ }),
     );
+
+    expect(screen.queryByLabelText("群成员与会话面板")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "查看群资料" }));
     const inspector = await screen.findByLabelText("群成员与会话面板");
-    expect(within(inspector).getByText("群成员")).toBeInTheDocument();
-    expect(within(inspector).getAllByText(/群资料/).length).toBeGreaterThan(0);
-    expect(within(inspector).getAllByText(/当前/).length).toBeGreaterThan(0);
-    expect(within(inspector).getByText("群名称")).toBeInTheDocument();
+    expect(within(inspector).getByRole("tab", { name: "群资料" })).toBeInTheDocument();
+    expect(within(inspector).getByRole("tab", { name: "成员" })).toBeInTheDocument();
+    expect(within(inspector).getByText("群聊名称")).toBeInTheDocument();
     expect(within(inspector).getByText("群公告")).toBeInTheDocument();
-    expect(within(inspector).getByText("成员编辑")).toBeInTheDocument();
-    expect(
-      within(inspector).getByRole("button", { name: /保存群资料/ }),
-    ).toBeInTheDocument();
-    expect(
-      within(inspector).getByRole("button", { name: /导出聊天记录/ }),
-    ).toBeInTheDocument();
+    expect(within(inspector).getByRole("button", { name: "编辑群公告" })).toBeInTheDocument();
+    expect(within(inspector).queryByText("当前成员")).not.toBeInTheDocument();
+
+    await fireEvent.click(within(inspector).getByRole("tab", { name: "成员" }));
+    expect(within(inspector).getByText("当前成员")).toBeInTheDocument();
+    expect(within(inspector).getByRole("button", { name: "添加成员" })).toBeInTheDocument();
+    expect(within(inspector).queryByText("群聊名称")).not.toBeInTheDocument();
+
+    const chatHeader = screen.getByRole("group", { name: "会话标题栏" });
+    await fireEvent.click(within(chatHeader).getByRole("button", { name: "收起详情" }));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("群成员与会话面板")).not.toBeInTheDocument(),
+    );
   });
 
   it("saves group announcement with the editable group profile", async () => {
@@ -2031,6 +2177,7 @@ describe("App", () => {
               id: "group:lan",
               title: "内网群聊",
               group_announcement: "旧群公告",
+              group_announcement_pinned: true,
               last_message_at: Date.now(),
               last_message_preview: "",
               unread_count: 0,
@@ -2049,6 +2196,7 @@ describe("App", () => {
             id: args?.request?.conversation_id,
             title: args?.request?.name,
             group_announcement: args?.request?.announcement,
+            group_announcement_pinned: args?.request?.announcement_pinned,
             last_message_at: Date.now(),
             last_message_preview: "",
             unread_count: 0,
@@ -2071,18 +2219,21 @@ describe("App", () => {
         "旧群公告",
       ),
     ).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "查看群资料" }));
     const inspector = await screen.findByLabelText("群成员与会话面板");
-    await fireEvent.input(within(inspector).getByLabelText("群公告"), {
+    await fireEvent.click(within(inspector).getByRole("button", { name: "编辑群公告" }));
+    const announcementDialog = await screen.findByRole("form", { name: "编辑群公告" });
+    await fireEvent.input(within(announcementDialog).getByLabelText("群公告内容"), {
       target: { value: "今天 15:00 发布窗口，所有人提前同步回滚方案。" },
     });
-    await fireEvent.click(
-      within(inspector).getByRole("button", { name: /保存群资料/ }),
-    );
+    expect(within(announcementDialog).getByRole("switch", { name: "置顶群公告" })).toBeChecked();
+    await fireEvent.click(within(announcementDialog).getByRole("button", { name: "发布公告" }));
 
     await waitFor(() =>
       expect(tauriInvoke).toHaveBeenCalledWith("update_group", {
         request: expect.objectContaining({
           announcement: "今天 15:00 发布窗口，所有人提前同步回滚方案。",
+          announcement_pinned: true,
         }),
       }),
     );
@@ -2091,13 +2242,14 @@ describe("App", () => {
         "今天 15:00 发布窗口，所有人提前同步回滚方案。",
       ),
     ).toBeInTheDocument();
-    expect(await screen.findByText("已更新群聊：内网群聊")).toBeInTheDocument();
+    expect(await screen.findByText("群公告已发布")).toBeInTheDocument();
   });
 
   it("clears the active conversation history from the inspector danger zone", async () => {
     render(App);
 
-    await fireEvent.click(within(await openComposerMoreTools()).getByRole("button", { name: "详情" }));
+    await waitForInitialConversationLoad();
+    await fireEvent.click(within(await screen.findByRole("group", { name: "会话标题栏" })).getByRole("button", { name: "查看直聊资料" }));
     await fireEvent.click(
       await screen.findByRole("button", { name: /清空聊天记录/ }),
     );
@@ -2137,19 +2289,18 @@ describe("App", () => {
     ).toBeInTheDocument();
   }, 15000);
 
-  it("keeps conversation details in the composer toolbar", async () => {
+  it("keeps conversation details in the title bar", async () => {
     render(App);
 
     const moreTools = await openComposerMoreTools();
-    expect(within(moreTools).getByTitle("会话详情")).toBeInTheDocument();
-    expect(
-      within(moreTools).getByRole("button", { name: /详情/ }),
-    ).toBeInTheDocument();
+    expect(within(moreTools).queryByRole("button", { name: /详情/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "会话标题栏" })).getByRole("button", { name: "查看直聊资料" })).toBeInTheDocument();
   });
 
   it("keeps attachment utilities above the message input instead of inside the input row", async () => {
     render(App);
 
+    await waitForInitialConversationLoad();
     const toolbar = await screen.findByRole("toolbar", { name: "消息工具栏" });
     expect(
       within(toolbar).getByRole("button", { name: "文件" }),
@@ -2171,8 +2322,8 @@ describe("App", () => {
     ).not.toBeInTheDocument();
     expect(within(await openComposerMoreTools()).getByRole("button", { name: "文件夹" })).toBeInTheDocument();
     expect(
-      within(toolbar).getByText("拖拽或粘贴文件/图片到输入区"),
-    ).toBeInTheDocument();
+      within(toolbar).queryByText("拖拽或粘贴文件/图片到输入区"),
+    ).not.toBeInTheDocument();
 
     const inputRow = document.querySelector(".composer-input-row");
     expect(inputRow).not.toBeNull();
@@ -2300,12 +2451,18 @@ describe("App", () => {
     expect(within(tray).getByText("report.pdf")).toBeInTheDocument();
     expect(within(tray).getByText("design")).toBeInTheDocument();
 
-    await fireEvent.click(within(tray).getByRole("button", { name: "发送" }));
+    await fireEvent.input(screen.getByPlaceholderText("输入消息"), {
+      target: { value: "请查收附件" },
+    });
+    expect(within(tray).queryByRole("button", { name: "发送" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     await waitFor(() => {
       expect(tauriInvoke).toHaveBeenCalledWith("send_files", {
         conversationId: "direct:demo-peer",
         paths: droppedPaths,
+        text: "请查收附件",
+        quote: null,
       });
     });
   });
@@ -2313,13 +2470,14 @@ describe("App", () => {
   it("appends an emoji from the composer toolbar", async () => {
     render(App);
 
+    await waitForInitialConversationLoad();
     const input = await screen.findByPlaceholderText("输入消息");
     const toolbar = await screen.findByRole("toolbar", { name: "消息工具栏" });
     await fireEvent.click(
       within(toolbar).getByRole("button", { name: "表情" }),
     );
     expect(
-      await screen.findByRole("menu", { name: "表情选择器" }),
+      await screen.findByRole("menu", { name: "表情和动图" }),
     ).toBeInTheDocument();
 
     await fireEvent.click(await screen.findByTitle("插入 👍"));
@@ -2646,12 +2804,8 @@ describe("App", () => {
     await fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const settingsWorkspace = await screen.findByRole("region", { name: "功能工作区" });
     await fireEvent.click(within(settingsWorkspace).getByRole("button", { name: "偏好" }));
-    const enableNotificationButton = await waitFor(() => {
-      const button = Array.from(settingsWorkspace.querySelectorAll<HTMLButtonElement>("button")).find((item) =>
-        item.textContent?.includes("开启系统通知")
-      );
-      expect(button).toBeTruthy();
-      return button as HTMLButtonElement;
+    const enableNotificationButton = await within(settingsWorkspace).findByRole("button", {
+      name: "开启系统通知",
     });
     await fireEvent.click(enableNotificationButton);
     await waitFor(() => expect(notificationPermissionGranted).toHaveBeenCalled());
@@ -2744,12 +2898,8 @@ describe("App", () => {
     await fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const settingsWorkspace = await screen.findByRole("region", { name: "功能工作区" });
     await fireEvent.click(within(settingsWorkspace).getByRole("button", { name: "偏好" }));
-    const enableNotificationButton = await waitFor(() => {
-      const button = Array.from(settingsWorkspace.querySelectorAll<HTMLButtonElement>("button")).find((item) =>
-        item.textContent?.includes("开启系统通知")
-      );
-      expect(button).toBeTruthy();
-      return button as HTMLButtonElement;
+    const enableNotificationButton = await within(settingsWorkspace).findByRole("button", {
+      name: "开启系统通知",
     });
     await fireEvent.click(enableNotificationButton);
     await waitFor(() => expect(notificationPermissionGranted).toHaveBeenCalled());
@@ -2801,19 +2951,22 @@ describe("App", () => {
   it("opens the current conversation search panel from the chat header", async () => {
     render(App);
 
+    await waitForInitialConversationLoad();
     expect(
-      (await screen.findAllByText(/欢迎使用灵犀内网通/)).length,
+      (await screen.findAllByText(/欢迎使用 iim/)).length,
     ).toBeGreaterThan(0);
-    await fireEvent.click(within(await openComposerMoreTools()).getByRole("button", { name: "搜索" }));
+    await fireEvent.click(
+      within(await screen.findByRole("group", { name: "会话标题栏" })).getByRole("button", { name: "搜索聊天记录" }),
+    );
     expect(
       await screen.findByRole("region", { name: "会话内搜索" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByPlaceholderText("搜索当前会话"),
+      await screen.findByPlaceholderText("查询聊天记录"),
     ).toBeInTheDocument();
     expect(
-      await screen.findByLabelText("按日期跳转聊天记录"),
-    ).toBeInTheDocument();
+      screen.queryByLabelText("按日期跳转聊天记录"),
+    ).not.toBeInTheDocument();
   });
 
   it("opens an app-owned composer edit menu for the message input", async () => {
@@ -2839,6 +2992,9 @@ describe("App", () => {
     render(App);
 
     await fireEvent.contextMenu(await findDemoMessageBubble());
+    const menu = await screen.findByRole("menu", { name: "消息快捷菜单" });
+    expect(menu).toHaveClass("message-context-menu");
+    expect(menu.querySelectorAll(".context-menu-section").length).toBe(1);
     expect(await screen.findByTitle("回应 👍")).toBeInTheDocument();
     expect(
       await screen.findByRole("menuitem", { name: "复制消息" }),
@@ -2849,6 +3005,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("menuitem", { name: "转发消息" }),
     ).toBeInTheDocument();
+    await openMessageMenuMore();
     expect(
       await screen.findByRole("menuitem", { name: "取消收藏" }),
     ).toBeInTheDocument();
@@ -2859,8 +3016,8 @@ describe("App", () => {
       screen.queryByRole("menuitem", { name: "撤回消息" }),
     ).not.toBeInTheDocument();
     expect(
-      await screen.findByRole("menuitem", { name: "会话详情" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("menuitem", { name: "会话详情" }),
+    ).not.toBeInTheDocument();
     expect(
       await screen.findByRole("menuitem", { name: "删除消息" }),
     ).toBeInTheDocument();
@@ -3082,6 +3239,7 @@ describe("App", () => {
 
     await screen.findByText("bulk favorite first");
     await fireEvent.contextMenu(await screen.findByText("bulk favorite first"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "多选消息" }),
     );
@@ -3129,6 +3287,7 @@ describe("App", () => {
 
     await screen.findByText("pin this rollout window");
     await fireEvent.contextMenu(await screen.findByText("pin this rollout window"));
+    await openMessageMenuMore();
     await fireEvent.click(await screen.findByRole("menuitem", { name: "置顶消息" }));
 
     expect(tauriInvoke).toHaveBeenCalledWith("set_message_pin", {
@@ -3181,6 +3340,7 @@ describe("App", () => {
 
     await screen.findByText("follow up on this message");
     await fireEvent.contextMenu(await screen.findByText("follow up on this message"));
+    await openMessageMenuMore();
     await fireEvent.click(await screen.findByRole("menuitem", { name: "加入待办" }));
 
     expect(tauriInvoke).toHaveBeenCalledWith("set_message_todo", {
@@ -3188,9 +3348,12 @@ describe("App", () => {
       todo: true,
     });
     expect(await screen.findByText("已加入消息待办")).toBeInTheDocument();
-    expect(within(await findMessageBubble("todo-context-message")).getByText("待办")).toBeInTheDocument();
+    const todoMessageRow = (await findMessageBubble("todo-context-message")).closest(".message-row");
+    expect(todoMessageRow).not.toBeNull();
+    expect(within(todoMessageRow as HTMLElement).getByText("待办")).toBeInTheDocument();
 
     await fireEvent.contextMenu(await screen.findByText("follow up on this message"));
+    await openMessageMenuMore();
     await fireEvent.click(await screen.findByRole("menuitem", { name: "完成待办" }));
 
     expect(tauriInvoke).toHaveBeenCalledWith("set_message_todo", {
@@ -3239,6 +3402,7 @@ describe("App", () => {
 
     await screen.findByText("bulk select all first");
     await fireEvent.contextMenu(await screen.findByText("bulk select all first"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "多选消息" }),
     );
@@ -3332,6 +3496,7 @@ describe("App", () => {
 
     await screen.findByText("bulk copy first");
     await fireEvent.contextMenu(await screen.findByText("bulk copy first"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "多选消息" }),
     );
@@ -3404,6 +3569,7 @@ describe("App", () => {
 
     await screen.findByText("bulk forward first");
     await fireEvent.contextMenu(await screen.findByText("bulk forward first"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "多选消息" }),
     );
@@ -3414,9 +3580,15 @@ describe("App", () => {
     expect(within(dialog).getByText("转发 2 条消息")).toBeInTheDocument();
     expect(within(dialog).getByText("bulk forward first")).toBeInTheDocument();
     expect(within(dialog).getByText("bulk forward second")).toBeInTheDocument();
-    await fireEvent.click(
-      within(dialog).getByRole("button", { name: /发送|取消置顶|归档|免扰/ }),
+    const target = within(dialog).getAllByRole("button", { name: /选择转发目标/ })[0];
+    await fireEvent.click(target);
+
+    expect(target).toHaveAttribute("aria-pressed", "true");
+    expect(tauriInvoke).not.toHaveBeenCalledWith(
+      "forward_message",
+      expect.anything(),
     );
+    await fireEvent.click(within(dialog).getByRole("button", { name: "确认转发" }));
 
     await waitFor(() => {
       expect(tauriInvoke).toHaveBeenCalledWith("forward_message", {
@@ -3465,6 +3637,7 @@ describe("App", () => {
 
     await screen.findByText("bulk delete first");
     await fireEvent.contextMenu(await screen.findByText("bulk delete first"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "多选消息" }),
     );
@@ -3544,6 +3717,7 @@ describe("App", () => {
     await fireEvent.contextMenu(
       await screen.findByText("delete me from context menu"),
     );
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "删除消息" }),
     );
@@ -3565,6 +3739,7 @@ describe("App", () => {
     await fireEvent.contextMenu(
       await screen.findByText("delete me from context menu"),
     );
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "删除消息" }),
     );
@@ -3595,23 +3770,21 @@ describe("App", () => {
       await screen.findByRole("menuitem", { name: "会话详情" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("menuitem", { name: "导出聊天记录" }),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByRole("menuitem", { name: "打开会话" }),
-    ).toBeInTheDocument();
-    expect(
       await screen.findByRole("menuitem", { name: "取消置顶" }),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("menuitem", { name: "免打扰" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("menuitem", { name: "归档" }),
+      await screen.findByRole("menuitem", { name: "标为未读" }),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("menuitem", { name: "删除会话" }),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "打开会话" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "归档" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "导出聊天记录" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menu", { name: "会话快捷菜单" }).querySelectorAll('[role="menuitem"]')).toHaveLength(5);
     expect(document.querySelector(".app-context-menu")).not.toBeInTheDocument();
   });
 
@@ -3653,117 +3826,14 @@ describe("App", () => {
     expect(items[0]).toHaveFocus();
   });
 
-  it("copies a conversation identifier from the conversation context menu", async () => {
-    const writeText = vi.fn(async (_value: string) => undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
+  it("keeps low-frequency diagnostics out of the conversation context menu", async () => {
     render(App);
 
     const conversationButton = await findSidebarConversationContextTarget();
     await fireEvent.contextMenu(conversationButton);
-    await fireEvent.click(
-      await screen.findByRole("menuitem", { name: "复制会话 ID" }),
-    );
 
-    expect(writeText).toHaveBeenCalledWith("direct:demo-peer");
-    expect(await screen.findByText("会话 ID 已复制")).toBeInTheDocument();
-  });
-
-  it("copies a conversation diagnostic report from the conversation context menu", async () => {
-    const writeText = vi.fn(async (_value: string) => undefined);
-    const diagnosticMessage: ChatMessage = {
-      id: "conversation-diagnostic-message",
-      conversation_id: "direct:demo-peer",
-      sender_id: "local-demo",
-      body: "诊断用失败消息",
-      attachments: [
-        {
-          type: "transfer",
-          manifest: {
-            transfer_id: "diag-transfer-manifest",
-            files: [
-              {
-                path: "logs/error.txt",
-                relative_path: "logs/error.txt",
-                size: 1024,
-                sha256: "b".repeat(64),
-              },
-            ],
-            total_bytes: 1024,
-            chunk_size: 65536,
-            sha256: "c".repeat(64),
-          },
-        },
-      ],
-      created_at: Date.now(),
-      status: "failed",
-      recalled: false,
-      quote: null,
-      favorited: false,
-      reactions: [],
-    };
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-    tauriInvoke.mockImplementation((command: string) => {
-      if (command === "list_messages") return Promise.resolve([diagnosticMessage]);
-      if (command === "list_transfers") {
-        return Promise.resolve([
-          {
-            id: "diag-active-transfer",
-            conversationId: "direct:demo-peer",
-            name: "large.zip",
-            status: "sending",
-            errorMessage: "",
-            totalBytes: 4096,
-            sentBytes: 1024,
-            files: ["large.zip"],
-            resumable: true,
-          },
-          {
-            id: "diag-failed-transfer",
-            conversationId: "direct:demo-peer",
-            name: "failed.zip",
-            status: "failed",
-            errorMessage: "network interrupted",
-            totalBytes: 2048,
-            sentBytes: 512,
-            files: ["failed.zip"],
-            resumable: true,
-          },
-        ]);
-      }
-      return defaultTauriInvoke(command);
-    });
-    render(App);
-
-    await waitForInitialConversationLoad();
-    const conversationButton = await findSidebarConversationContextTarget();
-    await fireEvent.contextMenu(conversationButton);
-    await fireEvent.click(
-      await screen.findByRole("menuitem", { name: "复制会话诊断" }),
-    );
-
-    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    const report = writeText.mock.calls[0]?.[0] ?? "";
-    expect(report).toContain("灵犀内网通会话诊断");
-    expect(report).toContain("会话 ID：direct:demo-peer");
-    expect(report).toContain("类型：直连");
-    expect(report).toMatch(/未读：(0|2)/);
-    expect(report).toContain("已加载消息：1");
-    expect(report).toContain("失败消息：1");
-    expect(report).toContain("附件文件：1");
-    expect(report).toContain("传输任务：2");
-    expect(report).toContain("活跃传输：1");
-    expect(report).toContain("失败传输：1");
-    expect(await screen.findByText("会话诊断报告已复制")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "复制会话 ID" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "复制会话诊断" })).not.toBeInTheDocument();
   });
 
   it("opens conversation details from the conversation context menu", async () => {
@@ -3798,114 +3868,6 @@ describe("App", () => {
     expect(
       within(inspector).getByRole("heading", { name: "会话详情" }),
     ).toBeInTheDocument();
-  });
-
-  it("exports chat history from the conversation context menu", async () => {
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
-    dialogSave.mockResolvedValue("C:/tmp/direct-demo-peer.md");
-    tauriInvoke.mockImplementation(
-      (command: string, args?: { conversationId?: string; path?: string }) => {
-        if (command === "export_conversation_history")
-          return Promise.resolve(args?.path);
-        return defaultTauriInvoke(command);
-      },
-    );
-    render(App);
-
-    const conversationButton = await findSidebarConversationContextTarget();
-    await fireEvent.contextMenu(conversationButton);
-    await fireEvent.click(
-      await screen.findByRole("menuitem", { name: "导出聊天记录" }),
-    );
-
-    expect(dialogSave).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "导出聊天记录" }),
-    );
-    await waitFor(() =>
-      expect(tauriInvoke).toHaveBeenCalledWith("export_conversation_history", {
-        conversationId: "direct:demo-peer",
-        path: "C:/tmp/direct-demo-peer.md",
-      }),
-    );
-    expect(
-      await screen.findByText("聊天记录已导出：C:/tmp/direct-demo-peer.md"),
-    ).toBeInTheDocument();
-  });
-
-  it("clears chat history from the conversation context menu", async () => {
-    const message: ChatMessage = {
-      id: "clear-history-message",
-      conversation_id: "direct:demo-peer",
-      sender_id: "demo-peer",
-      body: "clear me from context menu",
-      attachments: [],
-      created_at: Date.now(),
-      status: "received",
-      recalled: false,
-      quote: null,
-      favorited: false,
-      reactions: [],
-    };
-    Object.defineProperty(window, "__TAURI_INTERNALS__", {
-      configurable: true,
-      value: {},
-    });
-    tauriInvoke.mockImplementation(
-      (command: string, args?: { conversationId?: string }) => {
-        if (command === "list_messages") return Promise.resolve([message]);
-        if (command === "clear_conversation_messages")
-          return Promise.resolve(1);
-        return defaultTauriInvoke(command);
-      },
-    );
-    render(App);
-
-    expect(
-      await screen.findByText("clear me from context menu"),
-    ).toBeInTheDocument();
-    const conversationButton = await findSidebarConversationContextTarget();
-    await fireEvent.contextMenu(conversationButton);
-    await fireEvent.click(
-      await screen.findByRole("menuitem", { name: "清空聊天记录" }),
-    );
-    const cancelDialog = await screen.findByRole("dialog", {
-      name: "确认清空聊天记录",
-    });
-    expect(
-      within(cancelDialog).getByText(/此操作只会清空本机历史记录/),
-    ).toBeInTheDocument();
-    await fireEvent.click(
-      within(cancelDialog).getByRole("button", { name: "取消" }),
-    );
-    expect(tauriInvoke).not.toHaveBeenCalledWith(
-      "clear_conversation_messages",
-      expect.anything(),
-    );
-    expect(screen.getByText("clear me from context menu")).toBeInTheDocument();
-
-    await fireEvent.contextMenu(conversationButton);
-    await fireEvent.click(
-      await screen.findByRole("menuitem", { name: "清空聊天记录" }),
-    );
-    const confirmDialog = await screen.findByRole("dialog", {
-      name: "确认清空聊天记录",
-    });
-    await fireEvent.click(
-      within(confirmDialog).getByRole("button", { name: "确认清空" }),
-    );
-
-    await waitFor(() =>
-      expect(tauriInvoke).toHaveBeenCalledWith("clear_conversation_messages", {
-        conversationId: "direct:demo-peer",
-      }),
-    );
-    expect(
-      screen.queryByText("clear me from context menu"),
-    ).not.toBeInTheDocument();
-    expect(await screen.findByText("已清空 1 条聊天记录")).toBeInTheDocument();
   });
 
   it("confirms before deleting a conversation from the context menu", async () => {
@@ -4127,7 +4089,7 @@ describe("App", () => {
     };
 
     emitTauriEvent("message:received", baseMessage);
-    expect(document.querySelector(".mention-flag")).not.toBeInTheDocument();
+    expect(document.querySelector(".conversation-state-chip.mention")).not.toBeInTheDocument();
 
     emitTauriEvent("message:received", {
       ...baseMessage,
@@ -4139,7 +4101,7 @@ describe("App", () => {
     });
 
     await waitFor(() => {
-      expect(document.querySelector(".mention-flag")).toBeInTheDocument();
+      expect(document.querySelector(".conversation-state-chip.mention")).toBeInTheDocument();
     });
   });
 
@@ -4167,7 +4129,7 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("marks the active conversation read and unread from the chat header", async () => {
+  it("keeps read and unread actions in the conversation menu instead of the chat header", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       configurable: true,
       value: {},
@@ -4175,15 +4137,13 @@ describe("App", () => {
     render(App);
 
     await waitForInitialConversationLoad();
-    await fireEvent.click(await screen.findByRole("button", { name: "标为已读" }));
+    const header = await screen.findByRole("group", { name: "会话标题栏" });
+    expect(within(header).queryByRole("button", { name: "标为已读" })).not.toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "标为未读" })).not.toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(tauriInvoke).toHaveBeenCalledWith("mark_conversation_read", {
-        conversationId: "direct:demo-peer",
-      });
-    });
-
-    await fireEvent.click(await screen.findByRole("button", { name: "标为未读" }));
+    const conversationButton = await findSidebarConversationContextTarget();
+    await fireEvent.contextMenu(conversationButton);
+    await fireEvent.click(await screen.findByRole("menuitem", { name: "标为未读" }));
 
     await waitFor(() => {
       expect(tauriInvoke).toHaveBeenCalledWith("mark_conversation_unread", {
@@ -4255,8 +4215,14 @@ describe("App", () => {
     expect(
       await screen.findByRole("dialog", { name: "转发消息" }),
     ).toBeInTheDocument();
-    expect(await screen.findByPlaceholderText("搜索会话")).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "转发消息" });
+    const search = within(dialog).getByPlaceholderText("搜索会话");
+    await waitFor(() => expect(search).toHaveFocus());
     expect(await screen.findByText("选择会话")).toBeInTheDocument();
+    expect(within(dialog).queryByText("direct:demo-peer")).not.toBeInTheDocument();
+    expect(dialog.querySelector(".forward-target-check")).toBeInTheDocument();
+    expect(within(dialog).queryByText("已选择")).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "确认转发" })).toBeDisabled();
   });
 
   it("shows attachment file names in the single-message forwarding preview", async () => {
@@ -4326,21 +4292,32 @@ describe("App", () => {
     render(App);
 
     await fireEvent.contextMenu(await findDemoMessageBubble());
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "消息详情" }),
     );
     const dialog = await screen.findByRole("dialog", { name: "消息详情" });
-    expect(within(dialog).getByText("交付审计")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(dialog).getByRole("button", { name: "关闭" })).toHaveFocus(),
+    );
+    const advancedSummary = within(dialog).getByText("交付与技术信息");
+    const advanced = advancedSummary.closest("details");
+    expect(advanced).not.toBeNull();
+    expect(advanced).not.toHaveAttribute("open");
+    expect(within(advanced as HTMLElement).getByText("交付审计")).toBeInTheDocument();
+    expect(dialog.querySelector(".message-detail-summary")).toBeInTheDocument();
     expect(within(dialog).getByText(/已写入本机加密历史/)).toBeInTheDocument();
     expect(within(dialog).getByText("消息 ID")).toBeInTheDocument();
     expect(within(dialog).getByText("hello")).toBeInTheDocument();
     expect(within(dialog).getByText("会话")).toBeInTheDocument();
     expect(within(dialog).getByText("direct:demo-peer")).toBeInTheDocument();
     expect(within(dialog).getByText("状态")).toBeInTheDocument();
-    expect(within(dialog).getByText("已读")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("已读").length).toBeGreaterThan(0);
     expect(within(dialog).getByText("收到的消息")).toBeInTheDocument();
-    expect(within(dialog).getByText("附件")).toBeInTheDocument();
-    expect(within(dialog).getByText("0 个")).toBeInTheDocument();
+    expect(within(dialog).queryByText("发送尝试")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("最后尝试")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("附件")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("暂无回应")).not.toBeInTheDocument();
     expect(within(dialog).getByText("消息正文")).toBeInTheDocument();
     expect(within(dialog).getByText(/我/)).toBeInTheDocument();
     expect(within(dialog).getByText("已收藏")).toBeInTheDocument();
@@ -4387,6 +4364,7 @@ describe("App", () => {
     render(App);
 
     await fireEvent.contextMenu(await screen.findByText("delivery audit body"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "消息详情" }),
     );
@@ -4400,9 +4378,9 @@ describe("App", () => {
     expect(within(receipts).getByText(/已送达 ·/)).toBeInTheDocument();
     expect(within(receipts).getByText("peer-b")).toBeInTheDocument();
     expect(within(receipts).getByText("等待 ACK")).toBeInTheDocument();
-    expect(within(dialog).getByText("发送尝试")).toBeInTheDocument();
-    expect(within(dialog).getByText("2 次")).toBeInTheDocument();
-    expect(within(dialog).getByText(new Date(1_700_000_123_000).toLocaleString("zh-CN"))).toBeInTheDocument();
+    expect(within(dialog).queryByText("发送尝试")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("2 次")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(new Date(1_700_000_123_000).toLocaleString("zh-CN"))).not.toBeInTheDocument();
     await waitFor(() =>
       expect(tauriInvoke).toHaveBeenCalledWith(
         "list_message_delivery_receipts",
@@ -4416,7 +4394,7 @@ describe("App", () => {
 
     expect(writeText).toHaveBeenCalledTimes(1);
     const report = writeText.mock.calls[0][0];
-    expect(report).toContain("灵犀内网通消息审计");
+    expect(report).toContain("iim 消息审计");
     expect(report).toContain("消息 ID：delivery-audit");
     expect(report).toContain("正文：\ndelivery audit body");
     expect(report).toContain("发送尝试：2 次");
@@ -4489,6 +4467,7 @@ describe("App", () => {
       name: "附件 2 个文件",
     });
     await fireEvent.contextMenu(attachment);
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "消息详情" }),
     );
@@ -4660,6 +4639,7 @@ describe("App", () => {
     render(App);
 
     await fireEvent.contextMenu(await findDemoMessageBubble());
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "消息详情" }),
     );
@@ -4719,6 +4699,7 @@ describe("App", () => {
     render(App);
 
     await fireEvent.contextMenu(await screen.findByText("transfer details"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "消息详情" }),
     );
@@ -4781,6 +4762,7 @@ describe("App", () => {
     render(App);
 
     await fireEvent.contextMenu(await screen.findByText("checksum details"));
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "消息详情" }),
     );
@@ -4806,6 +4788,7 @@ describe("App", () => {
     render(App);
 
     await fireEvent.contextMenu(await findDemoMessageBubble());
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "消息详情" }),
     );
@@ -4834,7 +4817,7 @@ describe("App", () => {
       await screen.findByRole("menuitem", { name: "复制消息" }),
     );
     expect(writeText).toHaveBeenCalledWith(
-      "欢迎使用灵犀内网通。无需服务器，同网段自动发现；联系人页就是设备发现与管理入口。",
+      "欢迎使用 iim。无需服务器，同网段自动发现；联系人页就是设备发现与管理入口。",
     );
     expect(
       await screen.findByText("消息复制失败：clipboard denied"),
@@ -4872,6 +4855,7 @@ describe("App", () => {
     await fireEvent.contextMenu(
       await screen.findByText("favorite failure body"),
     );
+    await openMessageMenuMore();
     await fireEvent.click(
       await screen.findByRole("menuitem", { name: "收藏消息" }),
     );
@@ -4908,6 +4892,7 @@ describe("App", () => {
     await fireEvent.contextMenu(
       await screen.findByText("local queued outbox body"),
     );
+    await openMessageMenuMore();
     expect(
       await screen.findByRole("menuitem", { name: "重新发送" }),
     ).toBeInTheDocument();
@@ -4917,6 +4902,41 @@ describe("App", () => {
     expect(
       await screen.findByRole("menuitem", { name: "撤回消息" }),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the active chat open when a message avatar opens peer details", async () => {
+    const message: ChatMessage = {
+      id: "incoming-avatar-details",
+      conversation_id: "direct:demo-peer",
+      sender_id: "demo-peer",
+      body: "avatar detail regression",
+      attachments: [],
+      created_at: Date.now(),
+      status: "delivered",
+      recalled: false,
+      quote: null,
+      favorited: false,
+      reactions: [],
+    };
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      configurable: true,
+      value: {},
+    });
+    tauriInvoke.mockImplementation((command: string) => {
+      if (command === "list_messages") return Promise.resolve([message]);
+      return defaultTauriInvoke(command);
+    });
+    render(App);
+
+    const messageText = await screen.findByText("avatar detail regression");
+    const messageRow = messageText.closest(".message-row");
+    const avatarButton = messageRow?.querySelector<HTMLButtonElement>(".message-avatar-button");
+    expect(avatarButton).toBeTruthy();
+    await fireEvent.click(avatarButton as HTMLButtonElement);
+
+    await waitFor(() => expect(document.querySelector(".inspector")).toBeInTheDocument());
+    expect(document.querySelector(".chat-workspace")).toBeInTheDocument();
+    expect(document.querySelector(".workspace-panel.contacts-workspace")).not.toBeInTheDocument();
   });
 
   it("does not offer retry for delivered local messages", async () => {
@@ -4946,6 +4966,7 @@ describe("App", () => {
     await fireEvent.contextMenu(
       await screen.findByText("delivered local message"),
     );
+    await openMessageMenuMore();
     expect(
       screen.queryByRole("menuitem", { name: "重新发送" }),
     ).not.toBeInTheDocument();

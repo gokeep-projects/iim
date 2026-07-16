@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "灵犀内网通",
+  "productName": "iim",
   "version": "0.1.0",
   "identifier": "com.iim.lan",
   "build": {
@@ -12,14 +12,15 @@
   "app": {
     "windows": [
       {
-        "title": "灵犀内网通",
+        "title": "iim",
         "width": 1280,
         "height": 800,
         "minWidth": 980,
         "minHeight": 640,
         "center": true,
         "maximized": true,
-        "resizable": true
+        "resizable": true,
+        "decorations": false
       }
     ],
     "security": {
@@ -29,6 +30,16 @@
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],
-    "icon": ["icons/icon.ico"]
+    "icon": ["icons/icon.ico"],
+    "publisher": "spurh",
+    "homepage": "https://spurh.com",
+    "copyright": "Copyright (c) 2026 spurh. All rights reserved.",
+    "shortDescription": "spurh LAN instant messenger",
+    "longDescription": "A reliable peer-to-peer instant messenger for local networks, created by xuning for spurh.",
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico"
+      }
+    }
   }
 }

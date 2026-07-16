@@ -1,7 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import type {
-  ChatMessage,
   NetworkSettings,
   PeerProfile,
   StorageOverview,
@@ -29,23 +28,6 @@ const transportConfig: TransportConfig = {
     batch_limit: 25,
   },
 };
-
-function message(patch: Partial<ChatMessage> = {}): ChatMessage {
-  return {
-    id: "msg-search-1",
-    conversation_id: "direct:peer-a",
-    sender_id: "peer-a",
-    body: "今晚值班我来处理",
-    attachments: [],
-    created_at: 1_700_000_010_000,
-    status: "received",
-    recalled: false,
-    quote: null,
-    favorited: false,
-    reactions: [],
-    ...patch,
-  };
-}
 
 function transferTask(patch: Partial<TransferTask> = {}): TransferTask {
   return {
@@ -92,6 +74,68 @@ function selfProfile(patch: Partial<PeerProfile> = {}): PeerProfile {
 }
 
 describe("WorkspacePanel search results", () => {
+  it("keeps the settings page heading concise", () => {
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "profile",
+      },
+    });
+
+    expect(screen.getByRole("heading", { name: "设置", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByText("管理个人资料、直连网络、加密存储、安全信任、通知与外观。")).not.toBeInTheDocument();
+  });
+
+  it("keeps contact editing in the profile pane instead of expanding list rows", async () => {
+    const updateMetadata = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "contacts",
+        settings,
+        peers: [
+          selfProfile({
+            peer_id: "peer-a",
+            display_name: "Alice",
+            hostname: "alice-pc",
+          }),
+        ],
+        contactMetadata: {
+          "peer-a": {
+            peer_id: "peer-a",
+            remark: "研发一号",
+            group_name: "研发部",
+            favorite: false,
+            blocked: false,
+          },
+        },
+        onContactMetadataChange: updateMetadata,
+      },
+    });
+
+    expect(document.querySelector(".contact-edit-grid")).not.toBeInTheDocument();
+    const profile = screen.getByRole("region", { name: "联系人资料" });
+    const remark = within(profile).getByRole("textbox", { name: "备注" });
+    const group = within(profile).getByRole("textbox", { name: "分组" });
+    expect(remark).toHaveValue("研发一号");
+    expect(group).toHaveValue("研发部");
+
+    await fireEvent.input(remark, { target: { value: "研发负责人" } });
+    expect(updateMetadata).toHaveBeenCalledWith("peer-a", { remark: "研发负责人" });
+  });
+
+  it("keeps the transfer workspace heading concise", () => {
+    render(WorkspacePanel, {
+      props: {
+        section: "files",
+        settings,
+      },
+    });
+
+    expect(screen.getByRole("heading", { name: "传输任务", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByText("以历史列表为主，快速检索文件名、任务 ID、状态和失败原因。")).not.toBeInTheDocument();
+  });
+
   it("renders a compact profile card with host, endpoint, and status actions", async () => {
     const changeStatus = vi.fn();
     render(WorkspacePanel, {
@@ -101,12 +145,12 @@ describe("WorkspacePanel search results", () => {
         settingsTab: "profile",
         self: selfProfile({
           display_name: "林溪",
-          hostname: "linxi-pc",
+          hostname: "dev-pc",
           endpoints: ["192.168.1.77:24251"],
           status: "away",
         }),
         profileName: "林溪",
-        profileHostname: "linxi-pc",
+        profileHostname: "dev-pc",
         profileStatus: "away",
         profileSignature: "随时在线处理内网协作",
         avatarLabel: "灵",
@@ -118,207 +162,91 @@ describe("WorkspacePanel search results", () => {
     expect(within(card).getByText("灵")).toBeInTheDocument();
     expect(within(card).getByText("林溪")).toBeInTheDocument();
     expect(within(card).getByText("随时在线处理内网协作")).toBeInTheDocument();
-    expect(within(card).getByText("linxi-pc")).toBeInTheDocument();
-    expect(within(card).getByText("192.168.1.77:24251")).toBeInTheDocument();
+    expect(within(card).getByText("dev-pc")).toBeInTheDocument();
+    expect(within(card).getByText("192.168.1.77")).toBeInTheDocument();
     expect(within(card).getByRole("button", { name: "离开" })).toHaveAttribute("aria-pressed", "true");
 
     await fireEvent.click(within(card).getByRole("button", { name: "在线" }));
     expect(changeStatus).toHaveBeenCalledWith("online");
   });
 
-  it("shows user-readable conversation titles for search and favorite messages", () => {
+  it("keeps avatar editing with personal information and previews a custom image", async () => {
+    const saveProfile = vi.fn();
+    const saveProfileExtras = vi.fn();
     render(WorkspacePanel, {
       props: {
-        section: "search",
-        query: "值班",
+        section: "settings",
         settings,
-        searchResults: [message()],
-        favoriteMessages: [message({ id: "msg-fav-1", favorited: true })],
-        todoMessages: [message({ id: "msg-todo-1" })],
-        conversationTitles: { "direct:peer-a": "研发一号" },
+        settingsTab: "profile",
+        self: selfProfile({ display_name: "林溪" }),
+        profileName: "林溪",
+        avatarImage: "data:image/png;base64,avatar-preview",
+        onSaveProfile: saveProfile,
+        onSaveProfileExtras: saveProfileExtras,
       },
     });
 
-    expect(screen.getAllByText(/研发一号/)).toHaveLength(3);
-    expect(screen.getByText("消息待办")).toBeInTheDocument();
+    const card = screen.getByRole("region", { name: "个人名片" });
+    expect(within(card).getByRole("img", { name: "当前头像" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,avatar-preview",
+    );
+    expect(screen.getByRole("region", { name: "头像设置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "上传头像" })).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: "保存个人信息" }));
+    expect(saveProfile).toHaveBeenCalledTimes(1);
+    expect(saveProfileExtras).toHaveBeenCalledTimes(1);
   });
 
-  it("shows outbox messages and opens the original conversation", async () => {
-    const openMessage = vi.fn();
-    const retryOutbox = vi.fn();
-    const outbox = message({
-      id: "msg-outbox-failed",
-      body: "retry this payload",
-      sender_id: "local-peer-id",
-      status: "failed",
-    });
-
+  it("opens avatar positioning in a focused dialog after choosing an image", async () => {
     render(WorkspacePanel, {
       props: {
-        section: "search",
-        query: "retry",
+        section: "settings",
         settings,
-        outboxMessages: [outbox],
-        conversationTitles: { "direct:peer-a": "研发一号" },
-        onOpenMessageResult: openMessage,
-        onRetryOutboxMessages: retryOutbox,
+        settingsTab: "profile",
+        self: selfProfile({ display_name: "林溪" }),
+        profileName: "林溪",
       },
     });
 
-    expect(screen.getByText("发件箱")).toBeInTheDocument();
-    expect(screen.getByText("发送失败")).toHaveClass("failed");
-    expect(screen.getByText("retry this payload")).toBeInTheDocument();
+    const input = screen.getByLabelText("选择头像图片");
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    await fireEvent.change(input, { target: { files: [file] } });
 
-    await fireEvent.click(screen.getByRole("button", { name: "全部重试" }));
-    await fireEvent.click(screen.getByRole("button", { name: "打开" }));
-
-    expect(retryOutbox).toHaveBeenCalledTimes(1);
-    expect(openMessage).toHaveBeenCalledWith(outbox);
+    const dialog = await screen.findByRole("dialog", { name: "调整头像" });
+    expect(within(dialog).getByText("移动和缩放图片，选择头像显示范围")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("缩放")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("左右位置")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("上下位置")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "取消" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "应用头像" })).toBeInTheDocument();
   });
 
-  it("uses attachment summaries for search and favorite results without text", () => {
-    const attachmentMessage = message({
-      id: "msg-attachment-only",
-      body: "",
-      attachments: [
-        {
-          type: "transfer",
-          manifest: {
-            transfer_id: "transfer-result",
-            files: [
-              {
-                path: "C:/work/report.pdf",
-                relative_path: null,
-                size: 4096,
-                sha256: "a".repeat(64),
-              },
-            ],
-            total_bytes: 4096,
-            chunk_size: 262144,
-            sha256: "b".repeat(64),
-          },
-        },
-      ],
-    });
+  it("does not mix avatar editing into general preferences", () => {
     render(WorkspacePanel, {
       props: {
-        section: "search",
-        query: "report",
+        section: "settings",
         settings,
-        searchResults: [attachmentMessage],
-        favoriteMessages: [attachmentMessage],
-        conversationTitles: { "direct:peer-a": "研发一号" },
+        settingsTab: "preferences",
       },
     });
 
-    expect(screen.getAllByText("文件：report.pdf")).toHaveLength(2);
+    expect(screen.queryByRole("region", { name: "头像设置" })).not.toBeInTheDocument();
   });
 
-  it("hides search and favorite message previews while privacy mode is enabled", () => {
-    const attachmentMessage = message({
-      id: "msg-private-attachment",
-      body: "",
-      attachments: [
-        {
-          type: "transfer",
-          manifest: {
-            transfer_id: "transfer-private-result",
-            files: [
-              {
-                path: "C:/work/payroll.xlsx",
-                relative_path: null,
-                size: 4096,
-                sha256: "a".repeat(64),
-              },
-            ],
-            total_bytes: 4096,
-            chunk_size: 262144,
-            sha256: "b".repeat(64),
-          },
-        },
-      ],
-    });
+  it("falls back to contacts instead of rendering the legacy message workbench", () => {
     render(WorkspacePanel, {
       props: {
-        section: "search",
-        privacyMode: true,
-        query: "secret",
+        section: "search" as never,
         settings,
-        searchResults: [
-          message({ body: "secret launch plan" }),
-          attachmentMessage,
-        ],
-        favoriteMessages: [
-          message({ id: "msg-private-fav", body: "favorite salary note" }),
-        ],
-        conversationTitles: { "direct:peer-a": "研发一号" },
       },
     });
 
-    expect(screen.queryByText("secret launch plan")).not.toBeInTheDocument();
-    expect(screen.queryByText("favorite salary note")).not.toBeInTheDocument();
-    expect(screen.queryByText("文件：payroll.xlsx")).not.toBeInTheDocument();
-    expect(screen.getAllByText("消息预览已隐藏")).toHaveLength(3);
-  });
-
-  it("uses file name summaries for multi-file attachment results without text", () => {
-    const attachmentMessage = message({
-      id: "msg-multi-attachment-only",
-      body: "",
-      attachments: [
-        {
-          type: "transfer",
-          manifest: {
-            transfer_id: "transfer-multi-result",
-            files: [
-              {
-                path: "a.txt",
-                relative_path: null,
-                size: 1,
-                sha256: "a".repeat(64),
-              },
-              {
-                path: "b.txt",
-                relative_path: null,
-                size: 1,
-                sha256: "b".repeat(64),
-              },
-            ],
-            total_bytes: 2,
-            chunk_size: 262144,
-            sha256: "c".repeat(64),
-          },
-        },
-      ],
-    });
-    render(WorkspacePanel, {
-      props: {
-        section: "search",
-        query: "附件",
-        settings,
-        searchResults: [attachmentMessage],
-      },
-    });
-
-    expect(screen.getByText("文件：a.txt、b.txt")).toBeInTheDocument();
-  });
-
-  it("opens the exact message from search results", async () => {
-    const openMessageResult = vi.fn();
-    const result = message({ id: "msg-search-target" });
-    render(WorkspacePanel, {
-      props: {
-        section: "search",
-        query: "值班",
-        settings,
-        searchResults: [result],
-        onOpenMessageResult: openMessageResult,
-      },
-    });
-
-    await fireEvent.click(screen.getByRole("button", { name: "打开" }));
-
-    expect(openMessageResult).toHaveBeenCalledWith(result);
+    expect(screen.getByRole("heading", { name: "联系人", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "搜索结果" })).not.toBeInTheDocument();
+    expect(screen.queryByText("消息待办")).not.toBeInTheDocument();
+    expect(screen.queryByText("发件箱")).not.toBeInTheDocument();
   });
 });
 
@@ -379,12 +307,13 @@ describe("WorkspacePanel settings", () => {
     });
 
     expect(screen.queryByText("消息提醒")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "偏好概览" })).toHaveTextContent("系统通知 未授权");
+    expect(screen.queryByRole("region", { name: "偏好概览" })).not.toBeInTheDocument();
     const notificationPanel = screen.getByRole("region", { name: "提醒与隐私" });
-    expect(notificationPanel).toHaveTextContent("通知设置已合并到设置页");
+    const notificationCommand = within(notificationPanel).getByRole("button", { name: "开启系统通知" });
+    expect(notificationCommand).toHaveClass("section-compact-action");
 
-    await fireEvent.click(within(notificationPanel).getByRole("button", { name: "开启系统通知" }));
-    await fireEvent.click(within(notificationPanel).getByRole("button", { name: "隐藏通知消息内容" }));
+    await fireEvent.click(notificationCommand);
+    await fireEvent.click(within(notificationPanel).getByRole("switch", { name: "通知预览" }));
 
     expect(enableNotifications).toHaveBeenCalledTimes(1);
     expect(togglePreview).toHaveBeenCalledTimes(1);
@@ -437,6 +366,61 @@ describe("WorkspacePanel settings", () => {
     expect(screen.getAllByText("24251/QUIC").length).toBeGreaterThan(0);
     expect(screen.getByText("3s")).toBeInTheDocument();
     expect(screen.getByText("15s")).toBeInTheDocument();
+  });
+
+  it("marks the active settings category in the settings navigation", () => {
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "network",
+      },
+    });
+
+    const nav = screen.getByRole("navigation", { name: "设置分类" });
+    const profile = within(nav).getByRole("button", { name: "个人" });
+    const network = within(nav).getByRole("button", { name: "网络" });
+    expect(network).toHaveAttribute("aria-current", "page");
+    expect(profile).not.toHaveAttribute("aria-current");
+  });
+
+  it("renders preference toggles as switches with checked state", () => {
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "preferences",
+        notificationReady: true,
+        showNotificationPreview: true,
+        privacyMode: false,
+        closeToTray: true,
+        dark: false,
+        loginEnabled: true,
+      },
+    });
+
+    expect(screen.getByRole("switch", { name: "通知预览" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "隐私模式" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: "关闭时隐藏到托盘" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "深色主题" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: "登录密码" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("button", { name: "最小化到托盘" })).toHaveClass("section-compact-action");
+  });
+
+  it("keeps the notification preview preference stable while privacy mode overrides it", () => {
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "preferences",
+        showNotificationPreview: true,
+        privacyMode: true,
+      },
+    });
+
+    const preview = screen.getByRole("switch", { name: "通知预览" });
+    expect(preview).toHaveAttribute("aria-checked", "true");
+    expect(preview).toBeDisabled();
   });
 
   it("does not expose editable advanced discovery timing values", async () => {
@@ -636,7 +620,7 @@ describe("WorkspacePanel settings", () => {
     await waitFor(() => expect(diagnostics).toHaveAttribute("aria-busy", "false"));
   });
 
-  it("copies a network diagnostic report for support handoff", async () => {
+  it("keeps support diagnostic copying out of network settings", () => {
     const copyNetworkDiagnostics = vi.fn();
     render(WorkspacePanel, {
       props: {
@@ -655,17 +639,8 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "复制诊断报告" }));
-
-    expect(copyNetworkDiagnostics).toHaveBeenCalledWith(
-      expect.stringContaining("自动发现：关闭"),
-    );
-    expect(copyNetworkDiagnostics).toHaveBeenCalledWith(
-      expect.stringContaining("默认发现受限"),
-    );
-    expect(copyNetworkDiagnostics).toHaveBeenCalledWith(
-      expect.stringContaining("UDP broadcast failed"),
-    );
+    expect(screen.queryByRole("button", { name: "复制诊断报告" })).not.toBeInTheDocument();
+    expect(copyNetworkDiagnostics).not.toHaveBeenCalled();
   });
 
   it("shows reliable delivery policy in network settings", async () => {
@@ -683,18 +658,11 @@ describe("WorkspacePanel settings", () => {
     const networkStatus = screen.getByLabelText("网络状态");
     expect(networkStatus).toHaveTextContent("25251/QUIC");
     expect(networkStatus).toHaveTextContent("可靠重试 15s");
-    expect(networkStatus).toHaveTextContent("最大尝试 9 次");
+    expect(networkStatus).toHaveTextContent("最大尝试 3 次");
     expect(networkStatus).toHaveTextContent("重试批量 25");
 
-    const diagnostics = screen.getByLabelText("网络诊断建议");
-    await fireEvent.click(within(diagnostics).getByRole("button", { name: "复制诊断报告" }));
-
-    expect(copyNetworkDiagnostics).toHaveBeenCalledWith(
-      expect.stringContaining("QUIC 监听端口：25251"),
-    );
-    expect(copyNetworkDiagnostics).toHaveBeenCalledWith(
-      expect.stringContaining("outbox 重试：15s / 9 次 / 每批 25"),
-    );
+    expect(screen.queryByRole("button", { name: "复制诊断报告" })).not.toBeInTheDocument();
+    expect(copyNetworkDiagnostics).not.toHaveBeenCalled();
   });
 
   it("routes settings category clicks through the parent settings controller", async () => {
@@ -855,7 +823,7 @@ describe("WorkspacePanel settings", () => {
     expect(migrateStorage).toHaveBeenCalledTimes(1);
   });
 
-  it("copies a storage diagnostic report for support handoff", async () => {
+  it("keeps diagnostic report copying out of storage settings", () => {
     const copyStorageDiagnostics = vi.fn();
     render(WorkspacePanel, {
       props: {
@@ -891,16 +859,8 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    await fireEvent.click(
-      screen.getByRole("button", { name: "复制存储诊断报告" }),
-    );
-
-    expect(copyStorageDiagnostics).toHaveBeenCalledTimes(1);
-    const report = copyStorageDiagnostics.mock.calls[0][0] as string;
-    expect(report).toContain("灵犀内网通存储诊断");
-    expect(report).toContain("数据库：C:/iim/data/history.db");
-    expect(report).toContain("缓存占用：3.0 KB");
-    expect(report).toContain("失败任务：1");
+    expect(screen.queryByRole("button", { name: "复制存储诊断报告" })).not.toBeInTheDocument();
+    expect(copyStorageDiagnostics).not.toHaveBeenCalled();
   });
 
   it("shows encrypted database size in storage overview", () => {
@@ -929,7 +889,7 @@ describe("WorkspacePanel settings", () => {
     expect(overview).toHaveTextContent("4.0 KB");
   });
 
-  it("searches trusted devices and copies fingerprints", async () => {
+  it("searches discovered and trusted devices in one list", async () => {
     const copyTrustedFingerprint = vi.fn();
     render(WorkspacePanel, {
       props: {
@@ -952,19 +912,97 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    await fireEvent.input(screen.getByPlaceholderText("搜索设备 ID 或指纹"), {
+    await fireEvent.input(screen.getByRole("textbox", { name: "搜索设备指纹" }), {
       target: { value: "beta" },
     });
-    await fireEvent.click(
-      screen.getByRole("button", { name: "复制 peer-beta 指纹" }),
-    );
 
     expect(screen.getByText("peer-beta")).toBeInTheDocument();
     expect(screen.queryByText("peer-alpha")).not.toBeInTheDocument();
-    expect(copyTrustedFingerprint).toHaveBeenCalledWith(
-      "beta-fingerprint",
-      "peer-beta 指纹",
-    );
+    expect(screen.getByText("已信任")).toBeInTheDocument();
+    expect(copyTrustedFingerprint).not.toHaveBeenCalled();
+  });
+
+  it("renders trusted devices in batches and loads the next batch at the scroll boundary", async () => {
+    const trustedPeers = Array.from({ length: 60 }, (_, index) => ({
+      peer_id: `peer-${String(index + 1).padStart(2, "0")}`,
+      fingerprint: `fingerprint-${String(index + 1).padStart(2, "0")}`,
+      trusted_at: 1_700_000_000 + index,
+    }));
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "security",
+        trustedPeers,
+      },
+    });
+
+    const list = screen.getByLabelText("设备指纹列表");
+    expect(within(list).getByText("peer-25")).toBeInTheDocument();
+    expect(within(list).queryByText("peer-26")).not.toBeInTheDocument();
+    expect(screen.getByText(/25 \/ 60 台/)).toBeInTheDocument();
+
+    Object.defineProperties(list, {
+      clientHeight: { configurable: true, value: 260 },
+      scrollHeight: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, value: 350 },
+    });
+    await fireEvent.scroll(list);
+
+    await waitFor(() => {
+      expect(within(list).getByText("peer-26")).toBeInTheDocument();
+      expect(screen.getByText(/50 \/ 60 台/)).toBeInTheDocument();
+    });
+  });
+
+  it("searches every discovered device without rendering the complete list first", async () => {
+    const peers = Array.from({ length: 60 }, (_, index) => {
+      const number = index + 1;
+      return selfProfile({
+        peer_id: `device-${String(number).padStart(2, "0")}`,
+        display_name: `设备 ${number}`,
+        hostname: `office-${number}`,
+        endpoints: [`10.20.30.${number}:24251`],
+        fingerprint: `device-fingerprint-${number}`,
+      });
+    });
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "security",
+        peers,
+      },
+    });
+
+    const list = screen.getByLabelText("设备指纹列表");
+    expect(within(list).queryByText("设备 54")).not.toBeInTheDocument();
+    await fireEvent.input(screen.getByRole("textbox", { name: "搜索设备指纹" }), {
+      target: { value: "10.20.30.54" },
+    });
+
+    expect(within(list).getByText("设备 54")).toBeInTheDocument();
+    expect(within(list).queryByText("设备 1")).not.toBeInTheDocument();
+    expect(screen.getByText(/1 \/ 1 台/)).toBeInTheDocument();
+  });
+
+  it("refreshes discovered and trusted fingerprints together", async () => {
+    const refreshPeers = vi.fn();
+    const refreshTrustedPeers = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "settings",
+        settings,
+        settingsTab: "security",
+        onRefreshPeers: refreshPeers,
+        onRefreshTrustedPeers: refreshTrustedPeers,
+      },
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: "刷新设备指纹" }));
+
+    expect(refreshPeers).toHaveBeenCalledTimes(1);
+    expect(refreshTrustedPeers).toHaveBeenCalledTimes(1);
   });
 
   it("defaults to open communication and toggles add-friend-only messaging", async () => {
@@ -984,19 +1022,19 @@ describe("WorkspacePanel settings", () => {
 	    expect(summary).toHaveTextContent("指纹信任 0 台");
 	    expect(summary).toHaveTextContent("指纹校验 一致");
 	
-	    const policy = screen.getByRole("group", { name: "通信权限策略" });
-	    expect(within(policy).getByRole("button", { name: "无需加好友" })).toHaveAttribute("aria-pressed", "true");
+	    const policy = screen.getByRole("radiogroup", { name: "通信权限策略" });
+	    expect(within(policy).getByRole("radio", { name: "无需加好友" })).toHaveAttribute("aria-checked", "true");
 	    expect(within(policy).getByText("默认：无需加好友")).toBeInTheDocument();
 	    expect(within(policy).getByText("同网段发现后可直接发消息和文件；设备指纹仍会被 TOFU 校验。")).toBeInTheDocument();
 	    expect(screen.getByText("已信任设备不是好友列表")).toBeInTheDocument();
 	    expect(screen.getByText("它只保存设备 ID 与证书指纹。默认模式仍允许发现设备直接通信；仅联系人模式下，添加好友后会自动建立设备信任。")).toBeInTheDocument();
 	
-	    await fireEvent.click(within(policy).getByRole("button", { name: "仅联系人可通信" }));
+	    await fireEvent.click(within(policy).getByRole("radio", { name: "仅联系人可通信" }));
 	
 	    expect(toggleRequireContact).toHaveBeenCalledWith(true);
 	  });
 
-  it("copies a trusted device audit record with current fingerprint status", async () => {
+  it("shows a trusted device with current IP and fingerprint status", () => {
     const copyIdentityValue = vi.fn();
     const betaPeer: PeerProfile = {
       peer_id: "peer-beta",
@@ -1023,22 +1061,12 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    await fireEvent.click(
-      screen.getByRole("button", { name: "复制 Beta Device 信任记录" }),
-    );
-
-    expect(copyIdentityValue).toHaveBeenCalledTimes(1);
-    const [report, label] = copyIdentityValue.mock.calls[0];
-    expect(label).toBe("Beta Device 信任记录");
-    expect(report).toContain("灵犀内网通信任记录");
-    expect(report).toContain("设备 ID：peer-beta");
-    expect(report).toContain("信任指纹：beta-fingerprint");
-    expect(report).toContain("当前发现状态：可联系");
-    expect(report).toContain("当前主机名：beta-host");
-    expect(report).toContain("当前端点：192.168.1.42:24251");
-    expect(report).toContain("当前上报指纹：beta-fingerprint");
-    expect(report).toContain("指纹校验：一致");
-    expect(screen.getByText("当前发现指纹一致")).toBeInTheDocument();
+    const list = screen.getByLabelText("设备指纹列表");
+    expect(within(list).getByText("Beta Device")).toBeInTheDocument();
+    expect(within(list).getByText("beta-host · 192.168.1.42")).toBeInTheDocument();
+    expect(within(list).getByText("已信任")).toBeInTheDocument();
+    expect(within(list).queryByText(/24251/)).not.toBeInTheDocument();
+    expect(copyIdentityValue).not.toHaveBeenCalled();
   });
 
   it("warns when a discovered trusted device reports a different fingerprint", () => {
@@ -1067,12 +1095,10 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    expect(screen.getByText("当前发现指纹与信任记录不一致")).toHaveClass(
-      "trust-warning",
-    );
+    expect(screen.getByText("指纹异常")).toHaveClass("danger");
   });
 
-  it("copies a security diagnostic report with fingerprint mismatches and warnings", async () => {
+  it("keeps diagnostic report copying out of security settings", () => {
     const copyIdentityValue = vi.fn();
     render(WorkspacePanel, {
       props: {
@@ -1104,19 +1130,8 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    await fireEvent.click(screen.getByRole("button", { name: "复制诊断报告" }));
-
-    expect(copyIdentityValue).toHaveBeenCalledTimes(1);
-    const [report, label] = copyIdentityValue.mock.calls[0];
-    expect(label).toBe("安全诊断报告");
-    expect(report).toContain("灵犀内网通安全诊断");
-    expect(report).toContain("已信任设备：1");
-    expect(report).toContain("指纹不一致：1");
-    expect(report).toContain("安全告警：1");
-    expect(report).toContain("不一致清单：Beta Device (peer-beta)");
-    expect(report).toContain("Peer fingerprint rejected for Beta Device");
-    expect(report).not.toContain("Discovery bind failed");
-    expect(report).toContain("当前发现指纹与信任记录不一致");
+    expect(screen.queryByRole("button", { name: "复制诊断报告" })).not.toBeInTheDocument();
+    expect(copyIdentityValue).not.toHaveBeenCalled();
   });
 
   it("exposes a privacy mode switch in workspace preferences", async () => {
@@ -1131,10 +1146,11 @@ describe("WorkspacePanel settings", () => {
       },
     });
 
-    expect(screen.getByText("隐私模式")).toBeInTheDocument();
-    expect(screen.getByText("保护中")).toBeInTheDocument();
+    const privacySwitch = screen.getByRole("switch", { name: "隐私模式" });
+    expect(privacySwitch).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "通知预览" })).toBeDisabled();
 
-    await fireEvent.click(screen.getByRole("button", { name: "关闭隐私模式" }));
+    await fireEvent.click(privacySwitch);
 
     expect(togglePrivacyMode).toHaveBeenCalledTimes(1);
   });
@@ -1399,6 +1415,27 @@ describe("WorkspacePanel transfers", () => {
 });
 
 describe("WorkspacePanel contacts empty state", () => {
+  it("keeps group selection controls inside the group dialog", async () => {
+    const createGroup = vi.fn();
+    render(WorkspacePanel, {
+      props: {
+        section: "contacts",
+        settings,
+        peers: [selfProfile({ peer_id: "peer-a", display_name: "Alice" })],
+        onCreateGroup: createGroup,
+      },
+    });
+
+    const overview = screen.getByLabelText("联系人概览");
+    const createButton = screen.getByRole("button", { name: "创建群聊" });
+    expect(within(overview).queryByText(/已选/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "选择 Alice 加入群聊" })).not.toBeInTheDocument();
+    expect(createButton).toBeEnabled();
+
+    await fireEvent.click(createButton);
+    expect(createGroup).toHaveBeenCalledTimes(1);
+  });
+
   it("filters contacts by favorite and blocked status", async () => {
     render(WorkspacePanel, {
       props: {
@@ -1497,7 +1534,7 @@ describe("WorkspacePanel contacts empty state", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders one discovery list and highlights peer IP endpoints without repeated reachability groups", () => {
+  it("shows peer IP addresses without ports in both list and details", () => {
     render(WorkspacePanel, {
       props: {
         section: "contacts",
@@ -1518,16 +1555,40 @@ describe("WorkspacePanel contacts empty state", () => {
             endpoints: ["10.0.8.24:24251"],
           }),
         ],
+        focusedContactPeerId: "peer-online",
       },
     });
 
     const list = screen.getByRole("region", { name: "发现设备列表" });
     expect(within(list).getByText("Online Alice")).toBeInTheDocument();
     expect(within(list).getByText("Away Bob")).toBeInTheDocument();
-    expect(within(list).getByText("192.168.31.24:24251")).toHaveClass("contact-ip-pill");
-    expect(within(list).getByText("10.0.8.24:24251")).toHaveClass("contact-ip-pill");
+    expect(within(list).getByText("192.168.31.24")).toBeInTheDocument();
+    expect(within(list).getByText("10.0.8.24")).toBeInTheDocument();
+    expect(within(list).queryByText("192.168.31.24:24251")).not.toBeInTheDocument();
+    const profile = screen.getByRole("region", { name: "联系人资料" });
+    expect(within(profile).getByText("192.168.31.24")).toBeInTheDocument();
+    expect(within(profile).queryByText("192.168.31.24:24251")).not.toBeInTheDocument();
     expect(screen.queryByText("可联系设备")).not.toBeInTheDocument();
     expect(screen.queryByText("暂不可达设备")).not.toBeInTheDocument();
+  });
+
+  it("searches contacts by IP address without disturbing the profile layout", async () => {
+    render(WorkspacePanel, {
+      props: {
+        section: "contacts",
+        settings,
+        peers: [
+          selfProfile({ peer_id: "peer-a", display_name: "研发一号", hostname: "rd-01", endpoints: ["192.168.10.8:24251"] }),
+          selfProfile({ peer_id: "peer-b", display_name: "客服二号", hostname: "support-02", endpoints: ["10.20.30.40:24251"] }),
+        ],
+      },
+    });
+
+    await fireEvent.input(screen.getByRole("searchbox", { name: "搜索联系人" }), { target: { value: "10.20.30" } });
+
+    const list = screen.getByRole("region", { name: "发现设备列表" });
+    expect(within(list).getByText("support-02")).toBeInTheDocument();
+    expect(within(list).queryByText("rd-01")).not.toBeInTheDocument();
   });
 
   it("copies contact identity values from the contact profile", async () => {
@@ -1562,7 +1623,7 @@ describe("WorkspacePanel contacts empty state", () => {
     );
   });
 
-  it("copies contact direct endpoints from the contact profile", async () => {
+  it("copies contact IP addresses without ports from the contact profile", async () => {
     const copyIdentityValue = vi.fn();
     render(WorkspacePanel, {
       props: {
@@ -1581,12 +1642,12 @@ describe("WorkspacePanel contacts empty state", () => {
 
     const profile = screen.getByRole("region", { name: "联系人资料" });
     await fireEvent.click(
-      within(profile).getByRole("button", { name: "复制联系人直连端点" }),
+      within(profile).getByRole("button", { name: "复制联系人 IP 地址" }),
     );
 
     expect(copyIdentityValue).toHaveBeenCalledWith(
-      "192.168.31.24:24251\n10.0.8.24:24251",
-      "联系人直连端点",
+      "192.168.31.24\n10.0.8.24",
+      "联系人 IP 地址",
     );
   });
 
@@ -1626,14 +1687,15 @@ describe("WorkspacePanel contacts empty state", () => {
     });
 
     const profile = screen.getByRole("region", { name: "联系人资料" });
+    await fireEvent.click(within(profile).getByText("设备与安全信息"));
     await fireEvent.click(
-      within(profile).getByRole("button", { name: "复制记录" }),
+      within(profile).getByRole("button", { name: "复制设备记录" }),
     );
 
     expect(copyIdentityValue).toHaveBeenCalledTimes(1);
     const [report, label] = copyIdentityValue.mock.calls[0];
     expect(label).toBe("研发一号 联系人记录");
-    expect(report).toContain("灵犀内网通联系人记录");
+    expect(report).toContain("iim 联系人记录");
     expect(report).toContain("显示名：Alice");
     expect(report).toContain("备注：研发一号");
     expect(report).toContain("分组：研发部");
@@ -1689,5 +1751,24 @@ describe("WorkspacePanel contacts empty state", () => {
     expect(screen.queryByRole("button", { name: "配置网络发现" })).not.toBeInTheDocument();
     expect(screen.getByText(/暂无联系人/)).toBeInTheDocument();
     expect(openSettingsTab).not.toHaveBeenCalled();
+  });
+
+  it("shows visible disabled refresh feedback while contacts are refreshing", () => {
+    render(WorkspacePanel, {
+      props: {
+        section: "contacts",
+        settings,
+        peers: [],
+        refreshingPeers: true,
+      },
+    });
+
+    const refreshActions = document.querySelectorAll<HTMLButtonElement>(".refresh-action");
+    expect(refreshActions.length).toBeGreaterThanOrEqual(2);
+    for (const action of refreshActions) {
+      expect(action).toBeDisabled();
+      expect(action).toHaveAttribute("aria-busy", "true");
+      expect(action).toHaveClass("loading");
+    }
   });
 });

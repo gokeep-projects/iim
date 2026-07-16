@@ -78,7 +78,7 @@ fn transport_defaults_match_lan_reliability_budget() {
     assert_eq!(config.heartbeat_secs, 15);
     assert_eq!(config.max_idle_timeout_secs, 60);
     assert_eq!(config.outbox.retry_after_millis(), 10_000);
-    assert_eq!(config.outbox.max_attempts(), 12);
+    assert_eq!(config.outbox.max_attempts(), 3);
     assert_eq!(config.outbox.batch_limit(), 50);
 }
 
@@ -89,6 +89,13 @@ fn outbox_delivery_policy_normalizes_zero_values() {
     assert_eq!(policy.retry_after_millis(), 0);
     assert_eq!(policy.max_attempts(), 1);
     assert_eq!(policy.batch_limit(), 1);
+}
+
+#[test]
+fn outbox_delivery_policy_caps_attempts_at_reliability_budget() {
+    let policy = OutboxDeliveryPolicy::new(10_000, 99, 50);
+
+    assert_eq!(policy.max_attempts(), 3);
 }
 
 #[test]

@@ -369,6 +369,8 @@ pub fn send_files(
     app: tauri::AppHandle,
     conversation_id: String,
     paths: Vec<String>,
+    text: Option<String>,
+    quote: Option<MessageQuote>,
     state: State<'_, AppState>,
 ) -> Result<ChatMessage, String> {
     if paths.is_empty() {
@@ -467,7 +469,7 @@ pub fn send_files(
                 .to_string()
         })
         .collect();
-    let summary = if file_names.len() == 1 {
+    let fallback_summary = if file_names.len() == 1 {
         format!("发送了文件：{}", file_names[0])
     } else {
         format!(
@@ -487,9 +489,12 @@ pub fn send_files(
         sender_id: state.identity().peer_id().to_string(),
         recipients,
         signature: Vec::new(),
-        quote: None,
+        quote,
         attachments: vec![MessageAttachment::transfer(manifest.clone())],
-        body: summary,
+        body: text
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(fallback_summary),
         created_at: Utc::now().timestamp_millis(),
     };
     dispatch_chat_body(app, state.inner(), body)
@@ -797,8 +802,8 @@ pub fn export_conversation_history(
         .store()
         .list_messages(conversation_id, u32::MAX)
         .map_err(|error| error.to_string())?;
-    let markdown = render_conversation_export(summary.as_ref(), conversation_id, &messages);
-    std::fs::write(&path, markdown).map_err(|error| error.to_string())?;
+    let text = render_conversation_export(summary.as_ref(), conversation_id, &messages);
+    std::fs::write(&path, format!("\u{feff}{text}")).map_err(|error| error.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -811,68 +816,50 @@ pub fn render_conversation_export(
         .map(|summary| summary.title.as_str())
         .unwrap_or(conversation_id);
     let mut output = String::new();
-    output.push_str(&format!("# {}\n\n", markdown_inline(title)));
+    output.push_str(&format!("会话：{}\n", export_single_line(title)));
     output.push_str(&format!(
-        "- 会话 ID：`{}`\n",
-        markdown_inline(conversation_id)
+        "会话 ID：{}\n",
+        export_single_line(conversation_id)
     ));
     output.push_str(&format!(
-        "- 导出时间：{}\n",
+        "导出时间：{}\n",
         format_export_time(Utc::now().timestamp_millis())
     ));
-    output.push_str(&format!("- 消息数量：{}\n\n", messages.len()));
+    output.push_str(&format!("消息数量：{}\n", messages.len()));
+    output.push_str("============================================================\n\n");
 
     for message in messages {
         output.push_str(&format!(
-            "## {} · {} · {}\n\n",
+            "[{}] {}  {}\n",
             format_export_time(message.created_at),
-            markdown_inline(&message.sender_id),
+            export_single_line(&message.sender_id),
             export_message_status_label(&message.status)
         ));
-        output.push_str(&format!("- 消息 ID：`{}`\n", markdown_inline(&message.id)));
-        output.push_str(&format!("- 发送尝试：{} 次\n", message.send_attempts));
-        output.push_str(&format!(
-            "- 最后尝试：{}\n\n",
-            export_attempt_time(message.last_attempt_at)
-        ));
         if message.recalled {
-            output.push_str("_此消息已撤回。_\n\n");
+            output.push_str("[已撤回]\n\n");
             continue;
         }
         if let Some(quote) = &message.quote {
             output.push_str(&format!(
-                "> 引用 {}（{}）：{}\n\n",
-                markdown_inline(&quote.sender_id),
-                markdown_inline(&quote.message_id),
-                markdown_inline(&quote.body_preview)
+                "引用 {}：{}\n",
+                export_single_line(&quote.sender_id),
+                export_single_line(&quote.body_preview)
             ));
         }
         if !message.body.trim().is_empty() {
-            output.push_str(&markdown_block(&message.body));
-            output.push_str("\n\n");
+            output.push_str(message.body.trim_end());
+            output.push('\n');
         }
         if !message.attachments.is_empty() {
-            output.push_str("附件：\n");
             for attachment in &message.attachments {
-                output.push_str(&format!(
-                    "- {} `{}`，{} 个文件，{} bytes，分片 {} bytes，总 SHA-256 `{}`\n",
-                    markdown_inline(&attachment.kind),
-                    markdown_inline(&attachment.manifest.transfer_id),
-                    attachment.manifest.files.len(),
-                    attachment.manifest.total_bytes,
-                    attachment.manifest.chunk_size,
-                    markdown_inline(&attachment.manifest.sha256)
-                ));
                 for file in &attachment.manifest.files {
                     output.push_str(&format!(
-                        "  - {} · {} bytes · `{}`\n",
-                        markdown_inline(&file.path),
-                        file.size,
-                        markdown_inline(&file.sha256)
+                        "[{}] {}\n",
+                        export_file_kind(&file.path),
+                        export_file_name(&file.path)
                     ));
                 }
             }
-            output.push('\n');
         }
         if !message.reactions.is_empty() {
             let reactions = message
@@ -881,11 +868,9 @@ pub fn render_conversation_export(
                 .map(|reaction| format!("{} {}", reaction.reaction, reaction.sender_id))
                 .collect::<Vec<_>>()
                 .join("，");
-            output.push_str(&format!("回应：{}\n\n", markdown_inline(&reactions)));
+            output.push_str(&format!("回应：{}\n", export_single_line(&reactions)));
         }
-        if message.favorited {
-            output.push_str("_已收藏_\n\n");
-        }
+        output.push('\n');
     }
     output
 }
@@ -894,13 +879,6 @@ fn format_export_time(value: i64) -> String {
     chrono::DateTime::<Utc>::from_timestamp_millis(value)
         .map(|time| time.to_rfc3339())
         .unwrap_or_else(|| value.to_string())
-}
-
-fn export_attempt_time(value: i64) -> String {
-    if value <= 0 {
-        return "尚未尝试".to_string();
-    }
-    format_export_time(value)
 }
 
 fn export_message_status_label(status: &MessageStatus) -> &'static str {
@@ -914,16 +892,30 @@ fn export_message_status_label(status: &MessageStatus) -> &'static str {
     }
 }
 
-fn markdown_inline(value: &str) -> String {
-    value.replace('\n', " ").replace('`', "\\`")
+fn export_single_line(value: &str) -> String {
+    value.replace(['\r', '\n'], " ")
 }
 
-fn markdown_block(value: &str) -> String {
-    value
-        .lines()
-        .map(|line| line.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n")
+fn export_file_name(path: &str) -> &str {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+}
+
+fn export_file_kind(path: &str) -> &'static str {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "gif" => "动图",
+        "png" | "jpg" | "jpeg" | "webp" | "bmp" => "图片",
+        "mp4" | "mov" | "avi" | "mkv" | "webm" => "视频",
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" => "音频",
+        _ => "文件",
+    }
 }
 
 #[tauri::command]
@@ -1066,6 +1058,8 @@ pub struct UpdateGroupRequest {
     pub name: String,
     #[serde(default)]
     pub announcement: String,
+    #[serde(default)]
+    pub announcement_pinned: bool,
     pub member_peer_ids: Vec<String>,
 }
 
@@ -1105,6 +1099,7 @@ pub fn create_group(
         &conversation_id,
         name.trim(),
         "",
+        false,
         &recipients,
         &all_members,
         state.inner(),
@@ -1125,6 +1120,7 @@ pub fn update_group(
     let conversation_id = request.conversation_id.trim();
     let name = request.name.trim();
     let announcement = request.announcement.trim();
+    let announcement_pinned = request.announcement_pinned && !announcement.is_empty();
     if !conversation_id.starts_with("group:") {
         return Err("only group conversations can be updated".to_string());
     }
@@ -1151,7 +1147,14 @@ pub fn update_group(
 
     state
         .store()
-        .upsert_group_conversation(conversation_id, name, announcement, &self_id, &all_members)
+        .upsert_group_conversation(
+            conversation_id,
+            name,
+            announcement,
+            announcement_pinned,
+            &self_id,
+            &all_members,
+        )
         .map_err(|error| error.to_string())?;
     let recipients = remote_members;
     let broadcast_result = broadcast_group_state(
@@ -1159,6 +1162,7 @@ pub fn update_group(
         conversation_id,
         name,
         announcement,
+        announcement_pinned,
         &recipients,
         &all_members,
         state.inner(),
@@ -1204,6 +1208,7 @@ fn broadcast_group_state(
     conversation_id: &str,
     name: &str,
     announcement: &str,
+    announcement_pinned: bool,
     recipients: &[String],
     all_members: &[String],
     state: &AppState,
@@ -1212,6 +1217,7 @@ fn broadcast_group_state(
         conversation_id,
         name,
         announcement,
+        announcement_pinned,
         state.identity().peer_id(),
         recipients,
         all_members,
@@ -1220,6 +1226,7 @@ fn broadcast_group_state(
         conversation_id,
         name,
         announcement,
+        announcement_pinned,
         state.identity().peer_id(),
         recipients,
         all_members,
@@ -1234,6 +1241,7 @@ fn broadcast_group_state(
             conversation_id: conversation_id.to_string(),
             name: name.to_string(),
             announcement: announcement.to_string(),
+            announcement_pinned,
             sender_id: state.identity().peer_id().to_string(),
             recipients: recipients.to_vec(),
             member_peer_ids: all_members.to_vec(),
@@ -2022,8 +2030,7 @@ pub fn get_storage_overview(state: State<'_, AppState>) -> Result<StorageOvervie
     let staged_files_dir = data_dir.join("staged");
     let transfer_task_count = state
         .store()
-        .list_transfers(1000)
-        .map(|tasks| tasks.len())
+        .transfer_count()
         .map_err(|error| error.to_string())?;
 
     Ok(StorageOverview {
@@ -2478,13 +2485,16 @@ mod tests {
     use super::{
         apply_contact_metadata_update, attachments_require_transfer_authorization,
         group_broadcast_warning, normalized_conversation_id, prepare_retry_transfer_offers,
-        read_receipt_batches, realtime_delivery_warning, transfer_status_allows_resume,
-        ContactMetadataRequest, RealtimeDeliveryResult,
+        read_receipt_batches, realtime_delivery_warning, render_conversation_export,
+        transfer_status_allows_resume, ContactMetadataRequest, RealtimeDeliveryResult,
     };
     use crate::{
         discovery::{PeerProfile, PeerStatus},
         identity::{to_hex, DeviceIdentity},
-        protocol::{ChatBody, ChatMessage, FileEntry, MessageAttachment, TransferManifest},
+        protocol::{
+            ChatBody, ChatMessage, FileEntry, MessageAttachment, MessageQuote, MessageStatus,
+            TransferManifest,
+        },
         AppState,
     };
     use sha2::{Digest, Sha256};
@@ -2662,6 +2672,9 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let _appdata = AppDataGuard::set(temp.path());
         let state = AppState::bootstrap().expect("state");
+        state
+            .hydrate_transfer_registry()
+            .expect("initial transfer registry hydration");
         let manifest = TransferManifest::from_entries(
             "transfer-block-command-auth".to_string(),
             vec![FileEntry::new("secret.txt".to_string(), 6, "a".repeat(64))
@@ -2782,6 +2795,52 @@ mod tests {
         assert_eq!(batches[1].0, "group:ops");
         assert_eq!(batches[1].1, "peer-a");
         assert_eq!(batches[1].2, vec!["msg-1".to_string()]);
+    }
+
+    #[test]
+    fn conversation_export_is_plain_text_with_readable_attachment_markers() {
+        let manifest = TransferManifest::from_entries(
+            "transfer-export".to_string(),
+            vec![
+                FileEntry::new("C:/share/screenshot.png".to_string(), 10, "a".repeat(64)),
+                FileEntry::new("C:/share/report.pdf".to_string(), 20, "b".repeat(64)),
+                FileEntry::new("C:/share/reaction.gif".to_string(), 30, "c".repeat(64)),
+            ],
+            262_144,
+        )
+        .expect("manifest");
+        let message = ChatMessage {
+            id: "msg-export".to_string(),
+            conversation_id: "direct:peer-a".to_string(),
+            sender_id: "peer-a".to_string(),
+            body: "请查看附件".to_string(),
+            attachments: vec![MessageAttachment::transfer(manifest)],
+            created_at: 1_700_000_000_000,
+            status: MessageStatus::Delivered,
+            recalled: false,
+            quote: Some(MessageQuote {
+                message_id: "quoted-message".to_string(),
+                sender_id: "local".to_string(),
+                body_preview: "原消息".to_string(),
+            }),
+            favorited: false,
+            reactions: Vec::new(),
+            send_attempts: 3,
+            last_attempt_at: 1_700_000_000_001,
+        };
+
+        let export = render_conversation_export(None, "direct:peer-a", &[message]);
+
+        assert!(export.contains("会话：direct:peer-a"));
+        assert!(export.contains("引用 local：原消息"));
+        assert!(export.contains("请查看附件"));
+        assert!(export.contains("[图片] screenshot.png"));
+        assert!(export.contains("[文件] report.pdf"));
+        assert!(export.contains("[动图] reaction.gif"));
+        assert!(!export.contains("# "));
+        assert!(!export.contains("```"));
+        assert!(!export.contains("transfer-export"));
+        assert!(!export.contains("尝试"));
     }
 
     #[test]

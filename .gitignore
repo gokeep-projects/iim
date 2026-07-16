@@ -11,3 +11,6 @@ Thumbs.db
 release/
 artifacts/
 .codegraph/
+.agent/
+.wolf
+.codex-run

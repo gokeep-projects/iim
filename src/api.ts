@@ -31,6 +31,7 @@ export interface ConversationSummary {
   id: string;
   title: string;
   group_announcement?: string;
+  group_announcement_pinned?: boolean;
   group_owner_peer_id?: string;
   last_message_at: number;
   last_message_preview: string;
@@ -114,7 +115,7 @@ export const defaultTransportConfig: TransportConfig = {
   max_idle_timeout_secs: 60,
   outbox: {
     retry_after_millis: 10_000,
-    max_attempts: 12,
+    max_attempts: 3,
     batch_limit: 50,
   },
 };
@@ -146,6 +147,7 @@ export interface AppPreferences {
   login_password_hash: string;
   profile_signature: string;
   avatar_label: string;
+  avatar_image: string;
   require_contact_for_messaging: boolean;
 }
 
@@ -279,6 +281,112 @@ const demoOfflinePeer: PeerProfile = {
   public_key: Array(32).fill(12),
 };
 
+const demoQaPeer: PeerProfile = {
+  peer_id: "qa-peer",
+  display_name: "测试四号",
+  hostname: "qa-pc",
+  avatar_hash: null,
+  status: "online",
+  endpoints: ["192.168.1.66:24251"],
+  fingerprint: "d".repeat(64),
+  public_key: Array(32).fill(13),
+};
+
+const demoFinancePeer: PeerProfile = {
+  peer_id: "finance-peer",
+  display_name: "财务五号",
+  hostname: "finance-pc",
+  avatar_hash: null,
+  status: "away",
+  endpoints: ["192.168.1.76:24251"],
+  fingerprint: "e".repeat(64),
+  public_key: Array(32).fill(14),
+};
+
+const demoHrPeer: PeerProfile = {
+  peer_id: "hr-peer",
+  display_name: "人事六号",
+  hostname: "hr-pc",
+  avatar_hash: null,
+  status: "online",
+  endpoints: ["192.168.1.86:24251"],
+  fingerprint: "9".repeat(64),
+  public_key: Array(32).fill(9),
+};
+
+const demoExtraPeers: PeerProfile[] = [
+  {
+    peer_id: "demo-rd",
+    display_name: "研发七号",
+    hostname: "rd-node",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.107:24251"],
+    fingerprint: "a".repeat(64),
+    public_key: Array(32).fill(10),
+  },
+  {
+    peer_id: "demo-support",
+    display_name: "客服八号",
+    hostname: "support-desk",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.118:24251"],
+    fingerprint: "1".repeat(64),
+    public_key: Array(32).fill(16),
+  },
+  {
+    peer_id: "demo-admin",
+    display_name: "行政九号",
+    hostname: "admin-room",
+    avatar_hash: null,
+    status: "away",
+    endpoints: ["192.168.1.129:24251"],
+    fingerprint: "2".repeat(64),
+    public_key: Array(32).fill(17),
+  },
+  {
+    peer_id: "demo-security",
+    display_name: "安保十号",
+    hostname: "security-gate",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.146:24251"],
+    fingerprint: "3".repeat(64),
+    public_key: Array(32).fill(18),
+  },
+  {
+    peer_id: "demo-market",
+    display_name: "市场十二号",
+    hostname: "marketing-pc",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.162:24251"],
+    fingerprint: "4".repeat(64),
+    public_key: Array(32).fill(19),
+  },
+  {
+    peer_id: "demo-frontdesk",
+    display_name: "前台十四号",
+    hostname: "frontdesk",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.184:24251"],
+    fingerprint: "5".repeat(64),
+    public_key: Array(32).fill(20),
+  },
+  {
+    peer_id: "demo-lab",
+    display_name: "实验室十五号",
+    hostname: "lab-node",
+    avatar_hash: null,
+    status: "online",
+    endpoints: ["192.168.1.195:24251"],
+    fingerprint: "6".repeat(64),
+    public_key: Array(32).fill(21),
+  },
+];
+
 const demoTrustedPeers: TrustedPeer[] = [
   {
     peer_id: demoPeer.peer_id,
@@ -308,7 +416,7 @@ const demoMessages = (conversationId: string): ChatMessage[] => [
     id: "hello",
     conversation_id: conversationId,
     sender_id: "demo-peer",
-    body: "欢迎使用灵犀内网通。无需服务器，同网段自动发现；联系人页就是设备发现与管理入口。",
+    body: "欢迎使用 iim。无需服务器，同网段自动发现；联系人页就是设备发现与管理入口。",
     attachments: [],
     created_at: Date.now() - 180000,
     status: "received",
@@ -321,7 +429,7 @@ const demoMessages = (conversationId: string): ChatMessage[] => [
     id: "file",
     conversation_id: conversationId,
     sender_id: "local-demo",
-    body: "文件、截图、群聊、全局搜索、安全信任和网络配置入口都已经接到功能闭环。",
+    body: "文件、截图、群聊、聊天记录搜索、安全信任和网络配置入口都已经接到功能闭环。",
     attachments: [
       {
         type: "transfer",
@@ -344,7 +452,7 @@ const demoMessages = (conversationId: string): ChatMessage[] => [
     quote: {
       message_id: "hello",
       sender_id: "demo-peer",
-      body_preview: "欢迎使用灵犀内网通。无需服务器...",
+      body_preview: "欢迎使用 iim。无需服务器...",
     },
   },
 ];
@@ -362,7 +470,9 @@ export async function updateSelfProfile(
 }
 
 export async function listPeers(): Promise<PeerProfile[]> {
-  if (!hasTauri()) return [demoPeer, demoOpsPeer, demoOfflinePeer];
+  if (!hasTauri()) {
+    return [demoPeer, demoOpsPeer, demoOfflinePeer, demoQaPeer, demoFinancePeer, demoHrPeer, ...demoExtraPeers];
+  }
   return invoke("list_peers");
 }
 
@@ -374,6 +484,90 @@ export async function listContactMetadata(): Promise<ContactMetadata[]> {
         remark: "研发一号",
         group_name: "研发部",
         favorite: true,
+        blocked: false,
+      },
+      {
+        peer_id: "ops-peer",
+        remark: "运维二号",
+        group_name: "运维",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "offline-peer",
+        remark: "设计三号",
+        group_name: "设计",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "qa-peer",
+        remark: "测试四号",
+        group_name: "研发部",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "finance-peer",
+        remark: "财务五号",
+        group_name: "职能",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "hr-peer",
+        remark: "人事六号",
+        group_name: "职能",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "demo-rd",
+        remark: "研发七号",
+        group_name: "研发部",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "demo-support",
+        remark: "客服八号",
+        group_name: "客服",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "demo-admin",
+        remark: "行政九号",
+        group_name: "职能",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "demo-security",
+        remark: "安保十号",
+        group_name: "园区",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "demo-market",
+        remark: "市场十二号",
+        group_name: "市场",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "demo-frontdesk",
+        remark: "前台十四号",
+        group_name: "园区",
+        favorite: false,
+        blocked: false,
+      },
+      {
+        peer_id: "demo-lab",
+        remark: "实验室十五号",
+        group_name: "研发部",
+        favorite: false,
         blocked: false,
       },
     ];
@@ -396,8 +590,8 @@ export async function listConversations(): Promise<ConversationSummary[]> {
         title: "研发一号",
         group_owner_peer_id: "",
         last_message_at: Date.now(),
-        last_message_preview: "文件、截图、群聊和全局搜索都已就绪",
-        unread_count: 2,
+        last_message_preview: "文件、截图、群聊和聊天记录搜索都已就绪",
+        unread_count: 0,
         manual_unread: false,
         pinned: true,
         muted: false,
@@ -410,6 +604,123 @@ export async function listConversations(): Promise<ConversationSummary[]> {
         group_owner_peer_id: "local-demo",
         last_message_at: Date.now() - 60000,
         last_message_preview: "今天的内网同步会议 15:00 开始",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "group:project-alpha",
+        title: "Alpha 项目组",
+        group_owner_peer_id: "local-demo",
+        last_message_at: Date.now() - 120000,
+        last_message_preview: "请测试、研发、设计同步今天的打包验收结果。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "group:office",
+        title: "办公室通知",
+        group_owner_peer_id: "local-demo",
+        last_message_at: Date.now() - 180000,
+        last_message_preview: "下午 15:00 内网同步会，文件请直接拖到聊天框。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "group:support-shift",
+        title: "客服值班群",
+        group_owner_peer_id: "local-demo",
+        last_message_at: Date.now() - 210000,
+        last_message_preview: "晚班同事请确认文件接收目录和通知开关。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "group:ops-security",
+        title: "运维安保联动群",
+        group_owner_peer_id: "local-demo",
+        last_message_at: Date.now() - 300000,
+        last_message_preview: "门禁网段今晚升级，运维和安保同步观察广播发现。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: true,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "group:all-hands",
+        title: "全员通知群",
+        group_owner_peer_id: "local-demo",
+        last_message_at: Date.now() - 420000,
+        last_message_preview: "新版 iim 已在内网灰度，大家可以用群聊和文件传输试用。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "direct:ops-peer",
+        title: "运维二号",
+        group_owner_peer_id: "",
+        last_message_at: Date.now() - 240000,
+        last_message_preview: "跨网段种子节点已更新，稍后刷新联系人。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "direct:demo-support",
+        title: "客服八号",
+        group_owner_peer_id: "",
+        last_message_at: Date.now() - 540000,
+        last_message_preview: "客户截图可以直接粘贴发送，文件也支持拖拽。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "direct:demo-market",
+        title: "市场十二号",
+        group_owner_peer_id: "",
+        last_message_at: Date.now() - 650000,
+        last_message_preview: "宣传物料我放到共享目录，也可以直接走文件传输。",
+        unread_count: 0,
+        manual_unread: false,
+        pinned: false,
+        muted: false,
+        archived: false,
+        draft_preview: "",
+      },
+      {
+        id: "direct:demo-frontdesk",
+        title: "前台十四号",
+        group_owner_peer_id: "",
+        last_message_at: Date.now() - 760000,
+        last_message_preview: "访客 Wi-Fi 这边已确认，不影响办公网广播。",
         unread_count: 0,
         manual_unread: false,
         pinned: false,
@@ -627,6 +938,8 @@ export async function sendNudge(conversationId: string): Promise<void> {
 export async function sendFiles(
   conversationId: string,
   paths: string[],
+  text = "",
+  quote: MessageQuote | null = null,
 ): Promise<ChatMessage> {
   if (!hasTauri()) {
     const manifest = {
@@ -640,20 +953,17 @@ export async function sendFiles(
       id: `preview-file-${Date.now()}`,
       conversation_id: conversationId,
       sender_id: "local-demo",
-      body:
-        paths.length === 1
-          ? `已选择文件：${paths[0]}`
-          : `已选择 ${paths.length} 个文件`,
+      body: text.trim() || (paths.length === 1 ? `已选择文件：${paths[0]}` : `已选择 ${paths.length} 个文件`),
       attachments: [{ type: "transfer", manifest }],
       created_at: Date.now(),
       status: "queued",
       recalled: false,
       favorited: false,
       reactions: [],
-      quote: null,
+      quote,
     };
   }
-  return invoke("send_files", { conversationId, paths });
+  return invoke("send_files", { conversationId, paths, text, quote });
 }
 
 export async function stageClipboardFiles(files: File[]): Promise<string[]> {
@@ -800,6 +1110,7 @@ export async function updateGroup(
   conversationId: string,
   name: string,
   announcement: string,
+  announcementPinned: boolean,
   memberPeerIds: string[],
 ): Promise<ConversationSummary> {
   if (!hasTauri()) {
@@ -807,6 +1118,7 @@ export async function updateGroup(
       id: conversationId,
       title: name.trim() || "内网群聊",
       group_announcement: announcement.trim(),
+      group_announcement_pinned: announcementPinned,
       group_owner_peer_id: "local-demo",
       last_message_at: Date.now(),
       last_message_preview: "",
@@ -823,6 +1135,7 @@ export async function updateGroup(
       conversation_id: conversationId,
       name,
       announcement,
+      announcement_pinned: announcementPinned,
       member_peer_ids: memberPeerIds,
     },
   });
@@ -831,7 +1144,10 @@ export async function updateGroup(
 export async function listGroupMembers(
   conversationId: string,
 ): Promise<string[]> {
-  if (!hasTauri()) return ["demo-peer", "local-demo"];
+  if (!hasTauri()) {
+    if (conversationId === "group:project-alpha") return ["local-demo", "demo-peer", "offline-peer", "qa-peer"];
+    return ["demo-peer", "ops-peer", "qa-peer", "local-demo"];
+  }
   return invoke("list_group_members", { conversationId });
 }
 
@@ -942,6 +1258,7 @@ export async function getAppPreferences(): Promise<AppPreferences> {
       login_password_hash: "",
       profile_signature: "",
       avatar_label: "",
+      avatar_image: "",
       require_contact_for_messaging: false,
     };
   return invoke("get_app_preferences");

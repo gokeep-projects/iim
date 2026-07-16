@@ -14,7 +14,8 @@ use std::collections::HashMap;
 #[cfg(feature = "quic")]
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread;
 
 use anyhow::Context;
 use chrono::Utc;
@@ -24,7 +25,6 @@ use identity::DeviceIdentity;
 #[cfg(feature = "quic")]
 use protocol::QUIC_PORT;
 use store::{default_data_dir, EncryptedStore};
-#[cfg(feature = "quic")]
 use tauri::{Emitter, Manager};
 #[cfg(feature = "quic")]
 use transport::{QuicTransport, TransportConfig};
@@ -48,6 +48,7 @@ pub struct AppState {
     peer_seen_at: Mutex<HashMap<String, i64>>,
     settings: Mutex<NetworkSettings>,
     transfer_registry: TransferRegistry,
+    transfer_registry_hydration: OnceLock<Result<(), String>>,
     #[cfg(feature = "quic")]
     transport: Mutex<QuicTransport>,
 }
@@ -58,7 +59,7 @@ impl AppState {
             .ok()
             .and_then(|name| name.into_string().ok())
             .unwrap_or_else(|| "windows-pc".to_string());
-        let display_name = std::env::var("USERNAME").unwrap_or_else(|_| "IIM User".to_string());
+        let display_name = std::env::var("USERNAME").unwrap_or_else(|_| "iim 用户".to_string());
         let identity_path = default_data_dir().join("identity.json");
         let identity = DeviceIdentity::load_or_create(&identity_path, display_name, hostname)
             .context("load or create device identity")?;
@@ -73,16 +74,6 @@ impl AppState {
         let mut peer_seen_at = HashMap::new();
         peer_seen_at.insert(self_profile.peer_id.clone(), Utc::now().timestamp_millis());
 
-        let transfer_registry = TransferRegistry::default();
-        for (manifest, authorizations) in store
-            .list_resumable_local_transfer_offers(1000)
-            .context("load resumable local transfer offers")?
-        {
-            if manifest_sources_available(&manifest) {
-                transfer_registry.register_authorized(manifest, authorizations);
-            }
-        }
-
         Ok(Self {
             identity,
             identity_path,
@@ -91,7 +82,8 @@ impl AppState {
             peers: Mutex::new(peers),
             peer_seen_at: Mutex::new(peer_seen_at),
             settings: Mutex::new(settings),
-            transfer_registry,
+            transfer_registry: TransferRegistry::default(),
+            transfer_registry_hydration: OnceLock::new(),
             #[cfg(feature = "quic")]
             transport: Mutex::new(QuicTransport::default()),
         })
@@ -183,7 +175,28 @@ impl AppState {
     }
 
     pub fn transfer_registry(&self) -> &TransferRegistry {
+        if let Err(error) = self.hydrate_transfer_registry() {
+            eprintln!("failed to hydrate resumable transfer registry: {error}");
+        }
         &self.transfer_registry
+    }
+
+    pub fn hydrate_transfer_registry(&self) -> Result<(), String> {
+        self.transfer_registry_hydration
+            .get_or_init(|| {
+                let offers = self
+                    .store
+                    .list_resumable_local_transfer_offers(1000)
+                    .map_err(|error| error.to_string())?;
+                for (manifest, authorizations) in offers {
+                    if manifest_sources_available(&manifest) {
+                        self.transfer_registry
+                            .register_authorized(manifest, authorizations);
+                    }
+                }
+                Ok(())
+            })
+            .clone()
     }
 
     #[cfg(feature = "quic")]
@@ -208,10 +221,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_self_profile,
@@ -282,6 +292,18 @@ pub fn run() {
         .on_tray_icon_event(|app, event| desktop::handle_tray_event(app, event))
         .setup(|app| {
             desktop::install_system_tray(app)?;
+            let transfer_handle = app.handle().clone();
+            thread::spawn(move || {
+                let Some(state) = transfer_handle.try_state::<AppState>() else {
+                    return;
+                };
+                if let Err(error) = state.hydrate_transfer_registry() {
+                    let _ = transfer_handle.emit(
+                        "network:warning",
+                        format!("Transfer resume index unavailable: {error}"),
+                    );
+                }
+            });
             let handle = app.handle().clone();
             discovery::spawn_background_discovery(handle);
             #[cfg(feature = "quic")]
@@ -326,6 +348,7 @@ mod tests {
             peer_seen_at: Mutex::new(peer_seen_at),
             settings: Mutex::new(NetworkSettings::default()),
             transfer_registry: TransferRegistry::default(),
+            transfer_registry_hydration: OnceLock::new(),
             #[cfg(feature = "quic")]
             transport: Mutex::new(QuicTransport::default()),
         }
